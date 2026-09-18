@@ -1,0 +1,34 @@
+# Only the source code and the root README are meant to reach GitHub.
+
+# Environment
+.venv/
+.cache/
+__pycache__/
+*.py[cod]
+
+# Internal working notes (not published)
+notes/
+
+# Scratch, samples, build output, diagnostics
+out/
+exports/
+.remove_this/
+
+# Game / build artefacts, wherever they land
+*.rpack
+*.rpx
+*.pak
+*.nrproj
+*.bpproj
+*.dds
+*.cast
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
+
+# Game-derived test fixtures (not published)
+tests/data/

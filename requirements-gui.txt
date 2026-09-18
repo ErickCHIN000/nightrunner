@@ -1,0 +1,4 @@
+# Nightrunner (GUI) — installed into .venv by setup.bat
+numpy
+Pillow
+PySide6>=6.7
