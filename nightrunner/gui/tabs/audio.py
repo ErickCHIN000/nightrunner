@@ -85,6 +85,10 @@ class Tab(QWidget):
         self.btn_play.setEnabled(False)
         self.btn_play.clicked.connect(self._play_selected)
         head.addWidget(self.btn_play)
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.clicked.connect(self.stop)
+        head.addWidget(self.btn_stop)
         self.btn_export = QPushButton("Export sound…")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self._export_selected)
@@ -130,6 +134,7 @@ class Tab(QWidget):
         self.sound_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.sound_table.customContextMenuRequested.connect(self._sound_menu)
         self.sound_table.itemSelectionChanged.connect(self._sound_selected)
+        self.sound_table.doubleClicked.connect(self._play_selected)
         rl.addWidget(self.sound_table, 1)
         self.sound_count = QLabel("")
         rl.addWidget(self.sound_count)
@@ -265,7 +270,7 @@ class Tab(QWidget):
         i = items[0].row()
         return self.rows[i] if 0 <= i < len(self.rows) else None
 
-    def _sound_menu(self, pos) -> None:
+    def _sound_menu(self, pos) -> None:  # noqa: D401 - context menu
         idx = self.sound_table.indexAt(pos)
         if not idx.isValid() or not self.rows:
             return
@@ -273,6 +278,8 @@ class Tab(QWidget):
         m = QMenu(self)
         play = m.addAction("Play", lambda: self._play(row))
         play.setEnabled(row.found and preview.available())
+        stop = m.addAction("Stop", self.stop)
+        stop.setEnabled(self.btn_stop.isEnabled())
         if not preview.available():
             play.setToolTip(preview.INSTALL_HINT)
         act = m.addAction("Export .wem…", lambda: self._export(row))
@@ -290,7 +297,17 @@ class Tab(QWidget):
             self._media.setAudioOutput(self._audio_out)
             self._media.errorOccurred.connect(
                 lambda _e, msg: self.ctx.status.emit(f"Playback failed: {msg}"))
+            self._media.playbackStateChanged.connect(self._playback_changed)
         return self._media
+
+    def _playback_changed(self, state) -> None:
+        """Stop follows the player, so it is live exactly while something is playing."""
+        from PySide6.QtMultimedia import QMediaPlayer
+        self.btn_stop.setEnabled(state == QMediaPlayer.PlayingState)
+
+    def stop(self) -> None:
+        if getattr(self, "_media", None) is not None:
+            self._media.stop()
 
     def _play_selected(self) -> None:
         row = self._selected_row()
@@ -305,6 +322,7 @@ class Tab(QWidget):
         if data is None:
             QMessageBox.warning(self, TITLE, "Could not read that sound's audio.")
             return
+        self.stop()                                   # never overlap two sounds
         self.btn_play.setEnabled(False)
         self.ctx.runner.submit(("audio", "decode"), decode_wem, data, row.source_id,
                                on_done=self._on_decoded,

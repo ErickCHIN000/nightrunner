@@ -96,13 +96,21 @@ blocked. Bank parsing is also in reach: all 123 banks walk cleanly to their exac
    whitelist is the tool's own invention, which matches its author describing the patching side as something he
    made up rather than ported. Whether the engine reads those elements at all, or whether the work is really done
    by the stream-type flip and the extra mod container, is untested.
-4. **Encoding a `.wem` needs Audiokinetic's own tooling.** This was worth checking properly, because it changes
+4. **Encoding a `.wem` may not need Audiokinetic's tooling after all.** The game ships two PCM wems (source
+   plugin `0x00010001`, `fx` bank), so the engine's Wwise runtime carries the PCM codec, and PCM is writable with
+   `struct`. `nightrunner/audio/wem.py` builds that shape: its `fmt` chunk is byte-identical to the shipped one,
+   and vgmstream reads what it writes bit-exactly. Two unknowns remain before this is an import path — the
+   16-byte content-derived `hash` chunk that nothing here can compute (E12), and that swapping a sound to PCM
+   also means patching its plugin id in the bank (E13). Neither is confirmed in game. The original note below
+   still stands for Vorbis specifically.
+
+5. **Encoding Wwise Vorbis needs Audiokinetic's own tooling.** This was worth checking properly, because it changes
    what the dependency question even is. UTM-AIO does not encode audio with ffmpeg: its build notes say ffmpeg is
    there "only to normalise WAV files" — resample to 44.1 kHz, mix to stereo, write `pcm_s16le`. The actual
    conversion is `WwiseConsole.exe convert-external-source` against a template `.wproj`, i.e. the Wwise authoring
    application. So the missing piece is not a library anyone can vendor; it is a licensed third-party toolchain
    the user must install. Reading audio out needs vgmstream; writing audio in needs Wwise.
-5. `<data>/work/data_lang/speech_en/` has not been looked at.
+6. `<data>/work/data_lang/speech_en/` has not been looked at.
 
 **A reasonable first slice** is read-only and needs none of the above settled: an AESP reader, the registry
 parsed into names, a bank chunk/HIRC walk, and extraction of banks and `.wem` to disk. It is squarely what this

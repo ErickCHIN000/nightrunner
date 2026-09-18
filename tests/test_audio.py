@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nightrunner.audio import aesp, bnk, pinhead, preview, resolve  # noqa: E402
-from nightrunner.errors import FormatError, UnsupportedError  # noqa: E402
+from nightrunner.audio import aesp, bnk, pinhead, preview, resolve, wem  # noqa: E402
+from nightrunner.errors import BuildError, FormatError, UnsupportedError  # noqa: E402
 from tests.paths import have_game  # noqa: E402
 from tests.synth import tmpdir  # noqa: E402
 
@@ -538,98 +538,6 @@ class WemInfoTests(unittest.TestCase):
         self.assertIsNone(preview.read_info(b"RIFF" + struct.pack("<I", len(body)) + body))
 
 
-def stub_decoder(d: Path, *, ok: bool = True) -> Path:
-    """A tiny Python 'decoder' invoked as [exe, -o, out, in], so the tests need no vgmstream."""
-    script = d / "stub_decoder.py"
-    script.write_text(NL.join([
-        "import sys, pathlib",
-        "out = sys.argv[sys.argv.index('-o') + 1]",
-        f"ok = {ok!r}",
-        "if not ok:",
-        "    print('stub refused', file=sys.stderr); sys.exit(3)",
-        "src = pathlib.Path(sys.argv[-1]).read_bytes()",
-        "pathlib.Path(out).write_bytes(b'RIFFdecoded' + src[:4])",
-    ]), encoding="utf-8")
-    exe = d / "run_decoder.cmd"
-    exe.write_text(f'@"{sys.executable}" "{script}" %*' + NL, encoding="utf-8")
-    return exe
-
-
-class DecoderTests(unittest.TestCase):
-    """The decoder is external, so these drive a stub executable rather than needing vgmstream installed."""
-
-    def test_decodes_through_the_external_tool(self):
-        """An explicit decoder must win over the in-process backend, which is installed here."""
-        with tmproot("wem_decode") as d:
-            out = preview.decode_to_wav(riff(), d / "out.wav", decoder=stub_decoder(d))
-            self.assertTrue(out.is_file())
-            self.assertTrue(out.read_bytes().startswith(b"RIFFdecoded"))
-
-    def test_a_failing_decoder_reports_its_own_message(self):
-        with tmproot("wem_fail") as d:
-            with self.assertRaises(UnsupportedError) as cm:
-                preview.decode_to_wav(riff(), d / "out.wav", decoder=stub_decoder(d, ok=False))
-        self.assertIn("refused", str(cm.exception))
-
-    def test_a_missing_decoder_names_what_is_needed(self):
-        with tmproot("wem_missing") as d:
-            with self.assertRaises(UnsupportedError) as cm:
-                preview.decode_to_wav(riff(), d / "out.wav", decoder=d / "nope.exe")
-        self.assertIn("could not run", str(cm.exception).casefold())
-
-    def test_no_decoder_at_all_refuses_with_the_hint(self):
-        """Both backends absent. pyvgmstream is a real dependency now, so it has to be hidden explicitly."""
-        old = os.environ.pop(preview.ENV_VAR, None)
-        real_which = preview.shutil.which
-        real_spec = preview.importlib.util.find_spec
-        preview.shutil.which = lambda name: None
-        preview.importlib.util.find_spec = lambda name: None if name == preview.PY_MODULE else real_spec(name)
-        try:
-            self.assertIsNone(preview.find_decoder())
-            with tmproot("wem_none") as d:
-                with self.assertRaises(UnsupportedError) as cm:
-                    preview.decode_to_wav(riff(), d / "out.wav")
-            self.assertIn("vgmstream", str(cm.exception))
-            self.assertIn(preview.ENV_VAR, str(cm.exception))
-        finally:
-            preview.shutil.which = real_which
-            preview.importlib.util.find_spec = real_spec
-            if old is not None:
-                os.environ[preview.ENV_VAR] = old
-
-    def test_env_var_wins(self):
-        with tmproot("wem_env") as d:
-            exe = stub_decoder(d)
-            os.environ[preview.ENV_VAR] = str(exe)
-            try:
-                self.assertEqual(preview.find_decoder(), exe)
-                self.assertTrue(preview.available())
-            finally:
-                os.environ.pop(preview.ENV_VAR, None)
-
-    def test_the_temp_wem_is_cleaned_up(self):
-        before = set(Path(tempfile.gettempdir()).glob("*.wem"))
-        with tmproot("wem_tmp") as d:
-            preview.decode_to_wav(riff(), d / "out.wav", decoder=stub_decoder(d))
-        self.assertEqual(set(Path(tempfile.gettempdir()).glob("*.wem")) - before, set())
-
-    def test_the_old_generic_name_is_not_searched_for_on_path(self):
-        """Git for Windows ships usr/bin/test.exe. Finding that would make Play look available and then fail."""
-        self.assertIn("test.exe", preview.EXE_NAMES)
-        self.assertNotIn("test.exe", preview.PATH_NAMES)
-        seen = []
-        real = preview.shutil.which
-        preview.shutil.which = lambda name: seen.append(name) or None
-        old = os.environ.pop(preview.ENV_VAR, None)
-        try:
-            preview.find_decoder()
-        finally:
-            preview.shutil.which = real
-            if old is not None:
-                os.environ[preview.ENV_VAR] = old
-        self.assertEqual(seen, list(preview.PATH_NAMES))
-
-
 class PyVgmstreamBackendTests(unittest.TestCase):
     """The optional in-process backend. Never installed by this project, so these tests stub the module."""
 
@@ -662,22 +570,27 @@ class PyVgmstreamBackendTests(unittest.TestCase):
                           or b"RIFFwav-from-module")
         self.assertTrue(preview.have_pyvgmstream())
         self.assertTrue(preview.available())
-        self.assertEqual(preview.backend(), preview.PY_MODULE)
         self.assertEqual(preview.decode_in_process(riff()), b"RIFFwav-from-module")
         self.assertEqual(seen, [(b"RIFF", "sound.wem")])
 
-    def test_preferred_over_the_executable(self):
+    def test_decode_to_wav_writes_the_file(self):
         self.install_stub(lambda data, filename_hint=None: b"RIFFfrom-module")
         with tmproot("wem_pref") as d:
             out = preview.decode_to_wav(riff(), d / "out.wav")
             self.assertEqual(out.read_bytes(), b"RIFFfrom-module")
 
-    def test_an_explicit_decoder_still_wins(self):
-        """Passing a decoder explicitly must not be silently overridden by the module."""
-        self.install_stub(lambda data, filename_hint=None: b"RIFFfrom-module")
-        with tmproot("wem_explicit") as d:
-            out = preview.decode_to_wav(riff(), d / "out.wav", decoder=stub_decoder(d))
-            self.assertTrue(out.read_bytes().startswith(b"RIFFdecoded"))
+    def test_a_missing_module_refuses_with_a_useful_message(self):
+        real = preview.importlib.util.find_spec
+        preview.importlib.util.find_spec = lambda name: None if name == preview.PY_MODULE else real(name)
+        try:
+            self.assertFalse(preview.available())
+            with tmproot("wem_none") as d:
+                with self.assertRaises(UnsupportedError) as cm:
+                    preview.decode_to_wav(riff(), d / "out.wav")
+        finally:
+            preview.importlib.util.find_spec = real
+        self.assertIn(preview.PY_MODULE, str(cm.exception))
+        self.assertIn("requirements-gui.txt", str(cm.exception))
 
     def test_a_raising_backend_becomes_an_unsupported_error(self):
         def boom(data, filename_hint=None):
@@ -688,10 +601,9 @@ class PyVgmstreamBackendTests(unittest.TestCase):
         self.assertIn("bad stream", str(cm.exception))
         self.assertIn(preview.PY_MODULE, str(cm.exception))
 
-    def test_the_hint_names_both_routes(self):
+    def test_the_hint_says_how_to_fix_it(self):
         self.assertIn(preview.PY_MODULE, preview.INSTALL_HINT)
-        self.assertIn("vgmstream-cli", preview.INSTALL_HINT)
-        self.assertIn(preview.ENV_VAR, preview.INSTALL_HINT)
+        self.assertIn("requirements-gui.txt", preview.INSTALL_HINT)
 
 
 class Pcm16ConversionTests(unittest.TestCase):
@@ -744,3 +656,143 @@ class Pcm16ConversionTests(unittest.TestCase):
     def test_junk_is_not_crashed_on(self):
         for junk in (b"", b"RIFF", b"RIFF\0\0\0\0WAVE", b"RIFF" + b"\0" * 60):
             self.assertIsInstance(preview.to_pcm16_wav(junk), bytes)
+
+
+# ---- building a wem -----------------------------------------------------------------------------------------
+
+def wav_bytes(tag: int, bits: int, body: bytes, channels: int = 2, rate: int = 44100) -> bytes:
+    fmt = struct.pack("<HHIIHH", tag, channels, rate, rate * channels * bits // 8, channels * bits // 8, bits)
+    rest = (b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+            + b"data" + struct.pack("<I", len(body)) + body)
+    return b"RIFF" + struct.pack("<I", len(rest)) + rest
+
+
+def tone(frames: int = 2205, channels: int = 2, rate: int = 44100) -> bytes:
+    import numpy as np
+    t = np.arange(frames)
+    mono = (np.sin(2 * np.pi * 440.0 * t / rate) * 0.5 * 32767).astype("<i2")
+    return np.repeat(mono, channels).astype("<i2").tobytes()
+
+
+class ReadWavTests(unittest.TestCase):
+    def test_pcm16_passes_through(self):
+        body = tone()
+        got = wem.read_wav(wav_bytes(wem.WAVE_PCM, 16, body))
+        self.assertEqual((got.channels, got.sample_rate), (2, 44100))
+        self.assertEqual(got.frames, body)
+
+    def test_float32_is_converted(self):
+        import numpy as np
+        body = np.array([0.0, 1.0, -1.0, 0.5], dtype="<f4").tobytes()
+        got = wem.read_wav(wav_bytes(wem.WAVE_FLOAT, 32, body))
+        vals = np.frombuffer(got.frames, dtype="<i2")
+        self.assertEqual(list(vals[:3]), [0, 32767, -32767])
+
+    def test_8_bit_is_converted(self):
+        import numpy as np
+        body = bytes([128, 255, 0, 128])
+        vals = np.frombuffer(wem.read_wav(wav_bytes(wem.WAVE_PCM, 8, body)).frames, dtype="<i2")
+        self.assertEqual(list(vals), [0, 32512, -32768, 0])
+
+    def test_unsupported_shapes_are_refused_by_name(self):
+        for tag, bits in ((wem.WAVE_PCM, 24), (99, 16)):
+            with self.assertRaises(BuildError) as cm:
+                wem.read_wav(wav_bytes(tag, bits, b"\0" * 12))
+            self.assertIn("not supported", str(cm.exception))
+
+    def test_too_many_channels_is_refused(self):
+        with self.assertRaises(BuildError) as cm:
+            wem.read_wav(wav_bytes(wem.WAVE_PCM, 16, b"\0" * 48, channels=6))
+        self.assertIn("channels", str(cm.exception))
+
+    def test_not_a_wav(self):
+        with self.assertRaises(BuildError):
+            wem.read_wav(b"RIFFnope")
+
+
+class BuildPcmWemTests(unittest.TestCase):
+    def test_matches_the_shipped_fmt_shape(self):
+        """The two PCM wems the game ships have byte-identical 24-byte fmt chunks; ours must match that shape."""
+        blob = wem.build_pcm_wem(wem.WavPcm(1, 44100, tone(100, channels=1)))
+        chunks = {t.decode(): (o, n) for t, o, n in wem._chunks(blob)}
+        self.assertEqual(set(chunks), {"fmt ", "junk", "data"})
+        off, size = chunks["fmt "]
+        self.assertEqual(size, 24)
+        # exactly the bytes both shipped PCM wems carry: mono, 44100 Hz, 88200 B/s, block 2, 16-bit,
+        # cbSize 6, then the 6-byte Wwise extension
+        self.assertEqual(blob[off:off + 24].hex(),
+                         "feff0100" "44ac0000" "88580100" "0200" "1000" "0600" "000001410000")
+
+    def test_the_unknown_extension_is_copied_verbatim(self):
+        blob = wem.build_pcm_wem(wem.WavPcm(2, 44100, tone(50)))
+        off, size = next((o, n) for t, o, n in wem._chunks(blob) if t == b"fmt ")
+        self.assertEqual(blob[off + 18:off + 24], wem.PCM_FMT_EXTENSION)
+
+    def test_no_hash_chunk_is_invented(self):
+        """The shipped hash differs per file and its algorithm is unknown (E12), so none is written."""
+        blob = wem.build_pcm_wem(wem.WavPcm(2, 44100, tone(50)))
+        self.assertNotIn(b"hash", blob[:200])
+
+    def test_header_fields_follow_the_audio(self):
+        blob = wem.build_pcm_wem(wem.WavPcm(1, 48000, tone(480, channels=1, rate=48000)))
+        d = wem.describe(blob)
+        self.assertEqual((d["channels"], d["sample_rate"], d["bits"], d["codec"]), (1, 48000, 16, "pcm"))
+        self.assertAlmostEqual(d["duration"], 0.01, places=4)
+
+    def test_riff_size_is_right(self):
+        blob = wem.build_pcm_wem(wem.WavPcm(2, 44100, tone(50)))
+        self.assertEqual(struct.unpack_from("<I", blob, 4)[0], len(blob) - 8)
+
+    def test_junk_can_be_omitted(self):
+        blob = wem.build_pcm_wem(wem.WavPcm(2, 44100, tone(50)), junk=False)
+        self.assertEqual({t for t, _, _ in wem._chunks(blob)}, {b"fmt ", b"data"})
+
+    def test_refusals_name_the_limit(self):
+        with self.assertRaises(BuildError) as cm:
+            wem.build_pcm_wem(wem.WavPcm(2, 22050, tone(50)))
+        self.assertIn("22050", str(cm.exception))
+        with self.assertRaises(BuildError):
+            wem.build_pcm_wem(wem.WavPcm(2, 44100, b""))
+        with self.assertRaises(BuildError) as cm:
+            wem.build_pcm_wem(wem.WavPcm(2, 44100, b"\0" * 5))       # not whole frames
+        self.assertIn("frames", str(cm.exception))
+
+    def test_wav_to_wem_end_to_end(self):
+        body = tone()
+        blob = wem.wav_to_wem(wav_bytes(wem.WAVE_PCM, 16, body))
+        off, size = next((o, n) for t, o, n in wem._chunks(blob) if t == b"data")
+        self.assertEqual(blob[off:off + size], body)
+
+
+@unittest.skipUnless(preview.have_pyvgmstream(), "pyvgmstream not installed")
+class WemRoundTripTests(unittest.TestCase):
+    """vgmstream is an independent implementation of this format: if it reads what we write, the header is right."""
+
+    def round_trip(self, channels: int, rate: int, frames: int):
+        import numpy as np
+        import pyvgmstream
+        body = tone(frames, channels=channels, rate=rate)
+        blob = wem.build_pcm_wem(wem.WavPcm(channels, rate, body))
+        info = pyvgmstream.probe_buffer(blob, filename_hint="sound.wem")
+        self.assertEqual((info.sample_rate, info.channels), (rate, channels))
+        self.assertAlmostEqual(info.duration_seconds, frames / rate, places=4)
+        wav = pyvgmstream.decode_buffer_to_wav_bytes(blob, filename_hint="sound.wem")
+        tag = struct.unpack_from("<H", wav, 20)[0]
+        out = np.frombuffer(wav[44:], dtype="<f4" if tag == 3 else "<i2")
+        if tag == 3:
+            out = (np.clip(out, -1, 1) * 32767).astype("<i2")
+        src = np.frombuffer(body, dtype="<i2")
+        n = min(len(src), len(out))
+        self.assertGreater(n, 0)
+        return int(np.abs(src[:n].astype(int) - out[:n].astype(int)).max())
+
+    def test_stereo_44100_is_bit_exact(self):
+        self.assertEqual(self.round_trip(2, 44100, 2205), 0)
+
+    def test_mono_48000_is_bit_exact(self):
+        self.assertEqual(self.round_trip(1, 48000, 1200), 0)
+
+    def test_vgmstream_names_it_pcm(self):
+        import pyvgmstream
+        blob = wem.build_pcm_wem(wem.WavPcm(2, 44100, tone(100)))
+        self.assertIn("PCM", pyvgmstream.probe_buffer(blob, filename_hint="sound.wem").codec_name)

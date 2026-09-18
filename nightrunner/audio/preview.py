@@ -11,44 +11,25 @@ itself. Instead it drives **vgmstream**, which handles Wwise Vorbis natively, an
 what is missing when vgmstream is not installed — the same call already made for BC textures, where the answer
 was to point at `texconv` rather than ship an encoder.
 
-Two backends, tried in that order:
+Decoding goes through **pyvgmstream**, a dependency of this project (`requirements-gui.txt`). It is
+BSD-3-Clause — PyPI carries that in `license_expression`, where PEP 639 puts it; the older `license` field and the
+classifiers are both empty, so a check that reads only those wrongly concludes it is unlicensed — and it ships
+the licence files for vgmstream and pybind11 alongside its own.
 
-1. **pyvgmstream**, if the user has installed it — a binding that decodes bytes to wav bytes in memory, no
-   temporary files and no executable. It is BSD-3-Clause (PyPI `license_expression`, which is where PEP 639 puts
-   it now — the older `license` field and the classifiers are both empty, so a check that reads only those
-   wrongly concludes it is unlicensed), and it ships licence files for vgmstream and pybind11 alongside its own.
-   It is still *not* a dependency of this project and is never installed here: adding one is a deliberate
-   decision, not something to slip in behind a convenience.
-2. **vgmstream-cli**, found via `$NIGHTRUNNER_VGMSTREAM`, then beside this install, then `PATH`.
-
-Nothing is ever downloaded.
+An earlier version also drove a `vgmstream-cli` executable as a fallback. That is gone: with the binding
+installed by default nothing reached it, and an unused code path is worse than no code path.
 """
 from __future__ import annotations
 
 import importlib
 import importlib.util
-import os
-import shutil
 import struct
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from ..errors import UnsupportedError
-
-#: Executable names vgmstream ships under, newest first. `test.exe` is its old name and is deliberately **not**
-#: searched for on PATH: Git for Windows ships an unrelated `usr/bin/test.exe`, which a PATH search happily finds
-#: and which would make playback look available and then fail. It is accepted only when pointed at directly or
-#: found in a vgmstream folder beside this install.
-EXE_NAMES = ("vgmstream-cli", "vgmstream-cli.exe", "vgmstream.exe", "test.exe")
-
-#: The subset safe to look for on PATH.
-PATH_NAMES = ("vgmstream-cli", "vgmstream-cli.exe", "vgmstream.exe")
-
-ENV_VAR = "NIGHTRUNNER_VGMSTREAM"
 
 #: WAVE format tag of every wem in these games. 0xFFFF is "extensible/other"; here it means Wwise Vorbis.
 WWISE_VORBIS = 0xFFFF
@@ -60,9 +41,8 @@ WAVE_FLOAT = 3
 #: The optional in-process backend. Not a dependency: `pip install pyvgmstream` is the user's own call.
 PY_MODULE = "pyvgmstream"
 
-INSTALL_HINT = ("No Wwise Vorbis decoder found. Either put vgmstream-cli on PATH (or set "
-                f"{ENV_VAR} to it), or install the optional {PY_MODULE} package. ffmpeg cannot decode these "
-                "files. Nothing is downloaded for you.")
+INSTALL_HINT = (f"{PY_MODULE} is not installed, so this sound cannot be decoded. It is in "
+                "requirements-gui.txt; re-run setup.bat, or pip install it into the venv.")
 
 
 @dataclass
@@ -135,25 +115,6 @@ def to_pcm16_wav(wav: bytes) -> bytes:
     return hdr + body
 
 
-def find_decoder() -> Path | None:
-    """vgmstream, or None. Env first, then beside this install, then PATH."""
-    env = os.environ.get(ENV_VAR)
-    if env:
-        p = Path(env)
-        if p.is_file():
-            return p
-    here = Path(__file__).resolve().parents[2]
-    for name in EXE_NAMES:
-        for cand in (here / name, here / "tools" / name, here / "vgmstream" / name):
-            if cand.is_file():
-                return cand                       # a folder we own, so the generic old name is safe here
-    for name in PATH_NAMES:
-        hit = shutil.which(name)
-        if hit:
-            return Path(hit)
-    return None
-
-
 def have_pyvgmstream() -> bool:
     """Whether the optional in-process backend is importable. Checked without importing it."""
     try:
@@ -178,54 +139,13 @@ def decode_in_process(wem: bytes) -> bytes:
 
 
 def available() -> bool:
-    """Whether anything can decode a wem here."""
-    return have_pyvgmstream() or find_decoder() is not None
+    """Whether a wem can be decoded here."""
+    return have_pyvgmstream()
 
 
-def backend() -> str:
-    """Which backend a decode would use, for the UI to report. "none" when there is nothing."""
-    if have_pyvgmstream():
-        return PY_MODULE
-    exe = find_decoder()
-    return exe.name if exe is not None else "none"
-
-
-def decode_to_wav(wem: bytes, out_wav: Path, decoder: Path | None = None, timeout: float = 60.0) -> Path:
-    """Decode *wem* to a RIFF/PCM wav at *out_wav*. Raises `UnsupportedError` with the reason on failure.
-
-    The bytes are written to a temporary `.wem` first: vgmstream takes a path, and the member inside a container
-    has no file of its own.
-    """
-    if decoder is None and have_pyvgmstream():
-        out_wav = Path(out_wav)
-        out_wav.parent.mkdir(parents=True, exist_ok=True)
-        out_wav.write_bytes(decode_in_process(wem))
-        return out_wav
-    exe = decoder or find_decoder()
-    if exe is None:
-        raise UnsupportedError(INSTALL_HINT)
+def decode_to_wav(wem: bytes, out_wav: Path) -> Path:
+    """Decode *wem* to a 16-bit PCM wav at *out_wav*. Raises `UnsupportedError` with the reason on failure."""
     out_wav = Path(out_wav)
     out_wav.parent.mkdir(parents=True, exist_ok=True)
-    tmp = None
-    try:
-        fd, tmp_name = tempfile.mkstemp(suffix=".wem")
-        os.close(fd)
-        tmp = Path(tmp_name)
-        tmp.write_bytes(wem)
-        try:
-            r = subprocess.run([str(exe), "-o", str(out_wav), str(tmp)], capture_output=True, text=True,
-                               timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except subprocess.TimeoutExpired as exc:
-            raise UnsupportedError(f"{exe.name} did not finish within {timeout:g}s") from exc
-        except OSError as exc:
-            raise UnsupportedError(f"could not run {exe}: {exc}") from exc
-        if r.returncode != 0 or not out_wav.is_file():
-            detail = (r.stderr or r.stdout or "").strip().splitlines()
-            raise UnsupportedError(f"{exe.name} failed: {detail[-1] if detail else f'exit {r.returncode}'}")
-        return out_wav
-    finally:
-        if tmp is not None:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+    out_wav.write_bytes(decode_in_process(wem))
+    return out_wav

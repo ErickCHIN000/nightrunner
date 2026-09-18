@@ -9,6 +9,8 @@
     nr audio registry <meta.aesp> [--kind K] [--query S] [--limit N]
                                                         the wwisepinhead names (events, switches, states, buses)
     nr audio census  <audio dir> [--json-out F]         every container and every bank, with totals
+    nr audio towem   <in.wav> <out.wem> [--no-junk]     build a PCM .wem from a WAV (no Wwise needed)
+    nr audio weminfo <file.wem>                         what a .wem is: codec, rate, channels, chunks
 
 Nothing here writes into the game. `extract` is the only command that writes at all, and only where you say.
 """
@@ -20,7 +22,7 @@ import sys
 from pathlib import Path
 
 from ..errors import NightrunnerError
-from . import bnk
+from . import bnk, wem
 from .aesp import CONTAINERS, Aesp
 from .pinhead import MEMBER_NAME, Pinhead
 
@@ -179,6 +181,20 @@ def cmd_census(a) -> int:
     return 0
 
 
+def cmd_towem(a) -> int:
+    """WAV -> PCM .wem. No Wwise and no encoder: the engine ships PCM wems of its own (see audio/wem.py)."""
+    data = Path(a.input).read_bytes()
+    blob = wem.wav_to_wem(data, junk=not a.no_junk)
+    Path(a.out).write_bytes(blob)
+    _jprint({"out": a.out, **wem.describe(blob)})
+    return 0
+
+
+def cmd_weminfo(a) -> int:
+    _jprint(wem.describe(Path(a.file).read_bytes()), indent=2)
+    return 0
+
+
 def build(argv: list[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="nr audio", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -219,6 +235,16 @@ def build(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--query")
     p.add_argument("--limit", type=int)
     p.set_defaults(fn=cmd_registry)
+
+    p = sub.add_parser("towem", help="build a PCM .wem from a WAV")
+    p.add_argument("input")
+    p.add_argument("out")
+    p.add_argument("--no-junk", action="store_true", help="omit the junk padding chunk the shipped wems carry")
+    p.set_defaults(fn=cmd_towem)
+
+    p = sub.add_parser("weminfo", help="codec, rate, channels and chunks of a .wem")
+    p.add_argument("file")
+    p.set_defaults(fn=cmd_weminfo)
 
     p = sub.add_parser("census", help="every container and bank in a folder")
     p.add_argument("dir")

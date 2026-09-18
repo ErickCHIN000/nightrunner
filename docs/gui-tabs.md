@@ -237,17 +237,12 @@ decoder, so ordinary players cannot open one. ffmpeg reads the header and gives 
 here would mean porting `ww2ogg` and a Vorbis decoder into a project that takes no new dependencies, which is the
 same call already made for BC textures.
 
-There are two ways to give it a decoder, tried in this order:
+Decoding goes through `pyvgmstream`, which is in `requirements-gui.txt` and installed by `setup.bat`, so this
+works out of the box. It is BSD-3-Clause and ships prebuilt wheels for CPython 3.10–3.14 on Windows, Linux and
+macOS.
 
-1. **`pip install pyvgmstream`** — a binding that decodes in memory, no executable and no temporary files. It is
-   BSD-3-Clause, ships prebuilt wheels for CPython 3.10–3.14 on Windows, Linux and macOS, and includes the
-   licence files for vgmstream and pybind11 alongside its own. It is optional and is never installed for you:
-   this project's dependencies are stdlib, numpy, Pillow and PySide6, and adding to that list is a deliberate
-   decision rather than a convenience.
-2. **vgmstream-cli** — point at it with `NIGHTRUNNER_VGMSTREAM`, put it on `PATH`, or drop it in a `vgmstream`
-   folder beside the repository.
-
-Nothing is downloaded for you either way. The Play tooltip names whichever backend is in use.
+**Stop** halts playback, and is live only while something is playing. Double-clicking a row plays it. Starting a
+new sound stops the current one, so two never overlap.
 
 Finding the main menu audio, as a worked example: search `menu`, pick the `menu` bank, and its 33 sounds come up
 named — `menu_crafting`, `menu_upgrade`, `blocked_slot` and the rest — each pointing at an `sfx.aesp` member.
