@@ -18,6 +18,27 @@ Common to all tabs:
 * **File › SDB** switches between `runtime_dx11.sdb` and `runtime_dx12.sdb` (the SDB tab has the same dropdown).
 * Double-clicking a texture, mesh, material or model anywhere opens it in its own tab.
 
+## The update indicator
+
+Top right of the tab row: `v0.1.0 (+3) 89ef0b6` — the version, how many commits are waiting, and the commit this
+copy is on. It turns amber when an update is available and is grey otherwise; hovering explains the state.
+
+The check runs on a worker thread shortly after start and every six hours after that. It never blocks the window,
+and when it cannot reach GitHub it says "offline" and carries on — Nightrunner works entirely offline.
+
+Clicking it when an update is waiting opens a dialog listing what changed, grouped into FIXED / IMPROVED / OTHER
+from the commit subjects, with a count of anything not listed. **Update now** fast-forwards your checkout and tells
+you to restart. Clicking it when you are up to date just opens the repository in a browser.
+
+The update is a git fast-forward and nothing else. It refuses up front, naming the reason, when the tree has
+uncommitted changes, HEAD is detached, git is not installed, or this is not a clone — so it can never merge,
+rebase, or throw away work of yours. In those cases the button becomes **Open on GitHub** instead.
+
+Two environment variables matter if you run a fork: `NIGHTRUNNER_UPDATE_REPO` (default `ErickCHIN000/nightrunner`)
+and `NIGHTRUNNER_UPDATE_BRANCH` (default `main`). A private repository needs a token, read from
+`NIGHTRUNNER_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, or the GitHub CLI's stored auth. A public repository needs
+none.
+
 ---
 
 ## Raw
