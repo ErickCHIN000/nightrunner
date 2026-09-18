@@ -28,6 +28,7 @@ from ..widgets import SearchBar, human_size, mono_font
 TITLE = "Audio"
 
 BANK_COLUMNS = ("Bank", "Sounds", "Size")
+MEMBER_COLUMNS = ("Member", "Id", "Container", "Size", "Kind")
 SOUND_COLUMNS = ("#", "Source id", "Stream", "Audio from", "Size", "Event")
 
 
@@ -101,12 +102,13 @@ class Tab(QWidget):
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
-        self.search = SearchBar("search banks and events")
+        self.search = SearchBar("search by name, or by id")
         self.search.edit.textChanged.connect(self._filter)
         ll.addWidget(self.search)
         self.mode = QComboBox()
         self.mode.addItem("Banks", "banks")
         self.mode.addItem("Events (registry)", "events")
+        self.mode.addItem("Container members", "members")
         self.mode.currentIndexChanged.connect(self._filter)
         ll.addWidget(self.mode)
         self.left_table = QTableWidget(0, len(BANK_COLUMNS))
@@ -173,9 +175,16 @@ class Tab(QWidget):
     # ---- left list -------------------------------------------------------------------------------------------
     def _filter(self) -> None:
         q = self.search.edit.text().casefold().strip()
+        # Refilling the table leaves the old selection index valid, so itemSelectionChanged may never fire and
+        # the right-hand panel would keep describing whatever was there before the search changed.
+        self.left_table.clearSelection()
+        self._clear_detail()
         self.left_table.setSortingEnabled(False)
-        if self.mode.currentData() == "events":
+        mode = self.mode.currentData()
+        if mode == "events":
             self._fill_events(q)
+        elif mode == "members":
+            self._fill_members(q)
         else:
             self._fill_banks(q)
         self.left_table.setSortingEnabled(True)
@@ -194,7 +203,8 @@ class Tab(QWidget):
         """The registry's named events, and which preload (bank) each belongs to."""
         self.left_table.setHorizontalHeaderLabels(("Event", "Preload id", "Duration"))
         ph = self.index.registry if self.index else None
-        objs = [o for o in (ph.objects if ph else []) if o.kind == "Event" and (not q or q in o.name.casefold())]
+        objs = [o for o in (ph.objects if ph else [])
+                if o.kind == "Event" and (not q or q in o.name.casefold() or q == str(o.id))]
         objs = objs[:5000]
         self.left_table.setRowCount(len(objs))
         for r, o in enumerate(objs):
@@ -204,11 +214,52 @@ class Tab(QWidget):
         total = sum(1 for o in (ph.objects if ph else []) if o.kind == "Event")
         self.left_count.setText(f"{len(objs):,} of {total:,} events" + ("  (capped)" if len(objs) == 5000 else ""))
 
+    def _clear_detail(self) -> None:
+        self.rows = []
+        self.sound_table.setRowCount(0)
+        self.sound_count.setText("")
+        self.bank_label.setText("Select a bank, event or member.")
+        self.btn_play.setEnabled(False)
+        self.btn_export.setEnabled(False)
+
+    def _fill_members(self, q: str) -> None:
+        """Every member of every container, which is the only way to see the ones no bank references.
+
+        3,260 of `streams.aesp`'s 3,530 members are not reachable from any Sound this tool reads, so they appear
+        nowhere in the Banks view. Here they do.
+        """
+        self.left_table.setHorizontalHeaderLabels(MEMBER_COLUMNS)
+        rows = []
+        for stem, c in (self.index.containers if self.index else {}).items():
+            for m in c:
+                if q and q not in m.name.casefold() and q != str(m.id):
+                    continue
+                rows.append((m, stem))
+                if len(rows) >= 20000:
+                    break
+        self.left_table.setColumnCount(len(MEMBER_COLUMNS))
+        self.left_table.setRowCount(len(rows))
+        for r, (m, stem) in enumerate(rows):
+            self.left_table.setItem(r, 0, _cell(m.name))
+            self.left_table.setItem(r, 1, _cell(m.id, mono=True))
+            self.left_table.setItem(r, 2, _cell(f"{stem}.aesp"))
+            self.left_table.setItem(r, 3, _cell(human_size(m.size)))
+            self.left_table.setItem(r, 4, _cell(self._kind(stem, m)))
+        total = sum(len(c) for c in (self.index.containers if self.index else {}).values())
+        self.left_count.setText(f"{len(rows):,} of {total:,} members" + ("  (capped)" if len(rows) >= 20000 else ""))
+
+    def _kind(self, stem: str, member) -> str:
+        head = bytes(self.index.containers[stem].read(member)[:4])
+        return {b"BKHD": "soundbank", b"RIFF": "wem"}.get(head, "xml" if head[:2] == b"<?" else "?")
+
     def _left_selected(self) -> None:
         items = self.left_table.selectedItems()
         if not items or self.index is None:
             return
         name = self.left_table.item(items[0].row(), 0).text()
+        if self.mode.currentData() == "members":
+            self._show_member(name, int(self.left_table.item(items[0].row(), 1).text()))
+            return
         if self.mode.currentData() == "events":
             pid = self.left_table.item(items[0].row(), 1).text()
             bank = self._bank_of_preload(pid)
@@ -230,6 +281,30 @@ class Tab(QWidget):
                 hit = m.find(p.name) if m else None
                 return hit.name if hit else None
         return None
+
+    def _show_member(self, name: str, member_id: int) -> None:
+        """A container member on its own: which Sound objects, in which banks, point at it."""
+        self.rows = []
+        self.sound_table.setRowCount(0)
+        users = []
+        for bank in self.index.bank_names():
+            for r in self.index.resolve_bank(bank):
+                if r.source_id == member_id:
+                    users.append((bank, r))
+        self.sound_table.setRowCount(len(users))
+        for i, (bank, r) in enumerate(users):
+            names = self.index.event_names_by_sound(bank)
+            self.sound_table.setItem(i, 0, _cell(r.sound_index))
+            self.sound_table.setItem(i, 1, _cell(r.source_id, mono=True))
+            self.sound_table.setItem(i, 2, _cell(r.stream_type_name))
+            self.sound_table.setItem(i, 3, _cell(bank))
+            self.sound_table.setItem(i, 4, _cell(human_size(r.size) if r.size else ""))
+            self.sound_table.setItem(i, 5, _cell(", ".join(names.get(r.sound_id, []))))
+        self.rows = [r for _, r in users]
+        self.bank_label.setText(f"<b>{name}</b> (id {member_id}) — referenced by {len(users)} Sound object(s)"
+                                + ("" if users else "; no bank this tool reads points at it"))
+        self.bank_label.setTextFormat(Qt.RichText)
+        self.sound_count.setText(f"{len(users):,} references")
 
     # ---- sounds ----------------------------------------------------------------------------------------------
     def _on_resolved(self, res: dict) -> None:

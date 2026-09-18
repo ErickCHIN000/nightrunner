@@ -961,3 +961,24 @@ class DuplicateMemberTests(unittest.TestCase):
         a = aesp.Aesp(memoryview(blob), "t.aesp")
         self.assertEqual([bytes(a.read(m)) for m in a], [b"A", b"BB"])
         self.assertEqual(len({m.id for m in a}), 1)
+
+
+class CrossBankPluginTests(unittest.TestCase):
+    """A source can be referenced from several banks; every one must be told the codec changed.
+
+    Regression: apply_swaps patched only the bank named in the Swap, so other banks kept decoding the new PCM
+    data as Vorbis. 610713920 is referenced by `hud`, `menu` and `cnt_dlcft_hud` in the shipped data.
+    """
+
+    def test_patch_sound_plugin_hits_every_sound_with_that_source(self):
+        blob = make_bank([sound_object(1, 500, 0, plugin=wem.PLUGIN_VORBIS),
+                          sound_object(2, 500, 0, plugin=wem.PLUGIN_VORBIS),
+                          sound_object(3, 600, 0, plugin=wem.PLUGIN_VORBIS)])
+        out, n = build.patch_sound_plugin(blob, 500)
+        self.assertEqual(n, 2)
+        by = {}
+        for s in bnk.Bank(out, "b").sounds:
+            by.setdefault(s.source_id, set()).add(s.plugin)
+        self.assertEqual(by[500], {wem.PLUGIN_PCM})
+        self.assertEqual(by[600], {wem.PLUGIN_VORBIS})
+        self.assertEqual(len(out), len(blob))

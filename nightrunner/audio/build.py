@@ -230,15 +230,22 @@ def apply_swaps(audio_dir: Path | str, out_dir: Path | str, swaps: list[Swap], *
             entry = {"bank": sw.bank, "source_id": sw.source_id, "container": f"{r.source}.aesp",
                      "old_bytes": r.size, "new_bytes": len(payload), "new": describe(payload)}
             if patch_plugin:
-                base = bank_edits.get(sw.bank)
-                if base is None:
-                    b = idx.bank(sw.bank)
+                # A source can be referenced from several banks - 610713920 is used by `hud`, `menu` and
+                # `cnt_dlcft_hud`. Every one of them has to be told the codec changed, or the banks left alone
+                # decode PCM data as Vorbis. Patching only the named bank was a bug.
+                patched: dict[str, int] = {}
+                for other in idx.bank_names():
+                    b = bank_edits.get(other) or (idx.bank(other).data if idx.bank(other) else None)
                     if b is None:
-                        raise BuildError(f"no bank called {sw.bank!r}")
-                    base = b.data
-                base, n = patch_sound_plugin(base, sw.source_id)
-                bank_edits[sw.bank] = base
-                entry["plugin_patched"] = n
+                        continue
+                    b, n = patch_sound_plugin(b, sw.source_id)
+                    if n:
+                        bank_edits[other] = b
+                        patched[other] = n
+                entry["plugin_patched"] = patched
+                if sw.bank not in patched:
+                    report["warnings"].append(
+                        f"{sw.bank}: no sound there references source {sw.source_id}")
             report["swaps"].append(entry)
 
         for stem, replacements in touched.items():
