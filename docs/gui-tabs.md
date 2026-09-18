@@ -157,4 +157,31 @@ Materials, presets, and a texture reverse index (which materials bind a given te
 
 The material view has an overview and features page, the parameters shown against their preset defaults,
 per-variant texture bindings with catalog status, which models and meshes use the material (a background scan),
-the raw record hex, and JSON export. A Stats page runs Validate over the whole database.
+the raw record hex, and JSON export of the single material. A Stats page runs Validate over the whole database.
+
+**Export all…** in the header dumps the entire database to three JSON files:
+
+| file | contents |
+|---|---|
+| `sdb_materials.json` | every material: preset, tokens, every parameter with its decoded value, and the shader variants with their texture bindings; plus the textures it uses and, when the scans have run, what uses it |
+| `sdb_presets.json` | every preset: declared parameters, their types, expressions, annotations and decoded defaults |
+| `sdb_textures.json` | every texture the database binds, with the materials and parameters that bind it |
+
+No raw bytes go into any of them — no record hex, no packed words, no blob offsets. These are for reading,
+diffing and searching, not for rebuilding a database; there is no SDB writer, so nothing here round-trips. Use
+the material view's raw page or `nr sdb material --raw` when you want bytes.
+
+Two things worth knowing about the shapes. Every material has exactly one route (census 2026-09-17:
+26,670/26,670 in `runtime_dx11`, 26,665/26,665 in `runtime_dx12`), so that single route is flattened onto the
+material instead of sitting in an array that never has a second element; a material with any other number keeps
+the array. And shader variants are grouped by the texture bindings they share, because 68 % of them repeat
+another variant's bindings exactly — every selector and shader id is still listed, each distinct binding set
+just appears once.
+
+The **used by** section is only as good as the scans behind it. If the mesh scan has not finished, the export
+offers to run it first; export anyway and the file records what is known so far with `used_by.complete: false`,
+so an empty entry never silently reads as "nothing uses this".
+
+Expect roughly 110 MB for the materials file on Dying Light: The Beast, 15 MB for textures and 1.3 MB for
+presets, in about 15 seconds. The two large files are written compact because indenting them doubles the size of
+something nobody scrolls through by hand; pipe them through `jq` when you want to read one.

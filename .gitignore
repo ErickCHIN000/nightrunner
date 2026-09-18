@@ -12,6 +12,7 @@ notes/
 # Scratch, samples, build output, diagnostics
 out/
 exports/
+sdb_exports/
 .remove_this/
 
 # Game / build artefacts, wherever they land

@@ -7,11 +7,14 @@ import os
 from pathlib import Path
 
 
-def dump_json(obj, path: Path | str, indent: int = 2) -> None:
+def dump_json(obj, path: Path | str, indent: int | None = 2) -> None:
+    """Atomically write *obj* as JSON. `indent=None` writes it compact, without the separator
+    padding that would leave a large file with neither readable indentation nor a small size."""
     path = Path(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(obj, fh, indent=indent, ensure_ascii=False)
+        json.dump(obj, fh, indent=indent, separators=(",", ":") if indent is None else None,
+                  ensure_ascii=False)
         fh.write("\n")
     os.replace(tmp, path)
 

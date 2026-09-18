@@ -11,6 +11,7 @@ worker (first access to `ctx.sdb.sdb`); nothing here parses on the GUI thread.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -24,8 +25,10 @@ from PySide6.QtWidgets import (QComboBox, QAbstractItemView, QButtonGroup, QChec
                                QStackedWidget, QTableView, QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+from ...sdb import export as sdbexport
+from ...sdb.reader import Sdb
 from .. import sdbscan as scan
-from ..widgets import mono_font
+from ..widgets import human_size, mono_font
 
 MODES = ("Materials", "Presets", "Textures")
 P_MSG, P_MAT, P_PRESET, P_TEX, P_STATS = range(5)
@@ -156,6 +159,7 @@ class Tab(QWidget):
         self._preset_cur: dict | None = None
         self._tex_cur: str | None = None
         self._model_refs: dict | None = None
+        self._dump_cancel: threading.Event | None = None
         self._model_refs_loading = False
         self._mesh_scan_requested = False
         self.timings: dict[str, float] = {}
@@ -197,6 +201,10 @@ class Tab(QWidget):
         head.addWidget(QLabel("SDB"))
         head.addWidget(self.api_combo)
         head.addWidget(self.stats_btn)
+        self.dump_btn = QPushButton("Export all…")
+        self.dump_btn.setToolTip("Dump the whole database to JSON: materials, presets, textures")
+        self.dump_btn.clicked.connect(self._dump_clicked)
+        head.addWidget(self.dump_btn)
         root.addLayout(head)
 
         split = QSplitter(Qt.Horizontal)
@@ -1038,6 +1046,92 @@ class Tab(QWidget):
         if fn:
             self.ctx.set_export_dir(str(Path(fn).parent))
             self.export_json(Path(fn))
+
+    # ---- whole-database dump ------------------------------------------------------------------------------------
+    def used_by_indices(self) -> dict:
+        """What the tab already knows about material usage, in the shape `sdb.export` wants.
+
+        Only what has actually been scanned: the model refs when they are loaded, the mesh index as far as the
+        background scan got. `complete` says whether both were finished, so the document never implies that an
+        empty `used_by` means "nothing uses this" when the scan simply had not run.
+        """
+        models: dict[str, list] = {}
+        for key, rows in (self._model_refs or {}).get("refs", {}).items():
+            models[key] = [{"model": r.get("model"), "pak": r.get("pak"), "slot": r.get("slot"),
+                            "mesh": r.get("mesh"), "kind": r.get("kind"),
+                            "selected": r.get("selected")} for r in rows]
+        meshes: dict[str, list] = {}
+        cat = self.ctx.catalog
+        for key, gids in (self.scanner.index or {}).items():
+            meshes[key] = sorted({cat.name(g) for g in gids})
+        return {"models": models, "meshes": meshes,
+                "models_scanned": (self._model_refs or {}).get("models"),
+                "meshes_scanned": len(self.scanner.scanned) if self.scanner.index else 0,
+                "complete": bool(self._model_refs) and self.scanner.complete()}
+
+    def _dump_clicked(self) -> None:
+        sdb = self.svc.sdb                       # a property, not a call
+        if sdb is None:
+            QMessageBox.information(self, self.TITLE, "No database open.")
+            return
+        if self._dump_cancel is not None:
+            return
+        if not self.scanner.complete() or not self._model_refs:
+            box = QMessageBox(QMessageBox.Question, "Export all",
+                              "The 'used by' scan has not finished.\n\n"
+                              "Export now and the materials file records which models and meshes are known so far, "
+                              "marked incomplete. Run the mesh scan first for the full picture.", parent=self)
+            go = box.addButton("Export anyway", QMessageBox.AcceptRole)
+            box.addButton("Scan first", QMessageBox.RejectRole)
+            box.addButton(QMessageBox.Cancel)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is None or box.buttonRole(clicked) == QMessageBox.RejectRole:
+                if clicked is not None and box.buttonRole(clicked) == QMessageBox.RejectRole:
+                    self.ensure_model_refs()
+                    self.start_mesh_scan()
+                return
+            if clicked is not go:
+                return
+        d = QFileDialog.getExistingDirectory(self, "Export the database to", self.ctx.export_dir())
+        if not d:
+            return
+        self.ctx.set_export_dir(d)
+        self.start_dump(Path(d))
+
+    def start_dump(self, out_dir: Path) -> bool:
+        """Run the three-file dump in a worker. False when one is already running."""
+        if self._dump_cancel is not None:
+            return False
+        self._dump_cancel = threading.Event()
+        self.dump_btn.setEnabled(False)
+        used_by = self.used_by_indices()
+        path = self.svc.path
+        cancel = self._dump_cancel
+
+        def job():
+            with Sdb.open(path) as own:                      # the worker reads its own handle, never the tab's
+                return sdbexport.export_all(own, out_dir, used_by=used_by, cancel=cancel.is_set)
+
+        self._submit(("sdb", "dump"), job, on_done=self._on_dump_done, on_error=self._on_dump_failed)
+        self.ctx.status.emit(f"Exporting the database to {out_dir}…")
+        return True
+
+    def _on_dump_done(self, res: dict) -> None:
+        self._dump_cancel = None
+        self.dump_btn.setEnabled(True)
+        lines = [f"{k}: {v['count']:,} in {Path(v['path']).name} ({human_size(v['bytes'])})"
+                 for k, v in res.items()]
+        self.ctx.status.emit("Database exported: " + "; ".join(lines))
+        QMessageBox.information(self, self.TITLE, "Exported:\n\n" + "\n".join(lines))
+
+    def _on_dump_failed(self, err) -> None:
+        self._dump_cancel = None
+        self.dump_btn.setEnabled(True)
+        if isinstance(err, sdbexport.Cancelled):
+            self.ctx.status.emit("Database export cancelled.")
+            return
+        QMessageBox.warning(self, self.TITLE, f"Export failed:\n{err}")
 
     # ---- used by ------------------------------------------------------------------------------------------------
     def _on_mat_tab(self, i: int) -> None:
