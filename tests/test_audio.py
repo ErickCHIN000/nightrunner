@@ -796,3 +796,29 @@ class WemRoundTripTests(unittest.TestCase):
         import pyvgmstream
         blob = wem.build_pcm_wem(wem.WavPcm(2, 44100, tone(100)))
         self.assertIn("PCM", pyvgmstream.probe_buffer(blob, filename_hint="sound.wem").codec_name)
+
+
+class AudioTabApiTests(unittest.TestCase):
+    """Every `preview.*` the Audio tab reaches for must exist.
+
+    Regression: removing the executable backend left a `preview.backend()` call in a tooltip, which only runs
+    when a row is selected in a live tab - so the unit tests passed and the GUI raised AttributeError on click.
+    """
+
+    def test_the_tab_only_uses_attributes_preview_has(self):
+        import re
+        src = (Path(__file__).resolve().parents[1] / "nightrunner" / "gui" / "tabs" / "audio.py").read_text(
+            encoding="utf-8")
+        used = {m.group(1) for m in re.finditer(r"\bpreview\.(\w+)", src)}
+        self.assertTrue(used, "the tab should reference the preview module")
+        missing = sorted(n for n in used if not hasattr(preview, n))
+        self.assertEqual(missing, [], f"audio.py calls preview.{missing} which no longer exists")
+
+    def test_the_tab_only_uses_attributes_wem_and_resolve_have(self):
+        import re
+        src = (Path(__file__).resolve().parents[1] / "nightrunner" / "gui" / "tabs" / "audio.py").read_text(
+            encoding="utf-8")
+        for mod, name in ((resolve, "resolve"), (wem, "wem")):
+            used = {m.group(1) for m in re.finditer(rf"\b{name}\.(\w+)", src)}
+            missing = sorted(n for n in used if not hasattr(mod, n))
+            self.assertEqual(missing, [], f"audio.py calls {name}.{missing} which does not exist")
