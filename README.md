@@ -141,7 +141,7 @@ issue.
 
 ## Credits
 
-`nightrunner/cast/castlib.py` is vendored from the Cast format reference implementation (MIT). Findings from
+`nightrunner/cast/castlib.py` is vendored from DTZxPorter's Cast library (MIT, see CAST-LICENSE.txt). Findings from
 earlier community tooling for these games were used as a starting point and are labelled as such wherever they
 inform a structural claim.
 
@@ -151,3 +151,8 @@ None of this was worked out in a vacuum. To the people who were around for it:
 
 CHAINSAW · EricPlayZ · Gamer5700 · Goose · Light · nelson01023 · ODST · SDavidLee · Steffen · Teo ·
 Viktor Neres · xlhs
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). The vendored Cast library keeps its own MIT notice in
+[CAST-LICENSE.txt](CAST-LICENSE.txt).
