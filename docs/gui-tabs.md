@@ -225,5 +225,20 @@ sound is left unnamed rather than guessed at — that is about three quarters of
 Right-click or **Export sound…** writes the `.wem` out. There is no import: see [roadmap.md](roadmap.md) for what
 injection still needs.
 
+### Playing a sound
+
+**Play** decodes the selected sound and plays it. It needs [vgmstream](https://vgmstream.org) installed, and says
+so plainly when it is missing rather than failing quietly.
+
+That is not a shortcut. Every `.wem` in these games is codec `0xFFFF`, Wwise Vorbis — 302/302 `sfx` and 321/321
+`streams` members sampled. It is not standard Vorbis: the setup packet is stripped and the codebooks live in the
+decoder, so ordinary players cannot open one. ffmpeg reads the header and gives up with
+`Audio: none ([255][255][0][0] / 0xFFFF) ... unknown codec`. vgmstream handles it natively; writing a decoder
+here would mean porting `ww2ogg` and a Vorbis decoder into a project that takes no new dependencies, which is the
+same call already made for BC textures.
+
+Point Nightrunner at it with `NIGHTRUNNER_VGMSTREAM`, put `vgmstream-cli` on `PATH`, or drop it in a `vgmstream`
+folder beside the repository. Nothing is downloaded for you.
+
 Finding the main menu audio, as a worked example: search `menu`, pick the `menu` bank, and its 33 sounds come up
 named — `menu_crafting`, `menu_upgrade`, `blocked_slot` and the rest — each pointing at an `sfx.aesp` member.

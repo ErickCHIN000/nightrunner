@@ -11,6 +11,7 @@ results, the same contract as the other tabs (`notes/GUI.md`).
 """
 from __future__ import annotations
 
+import tempfile
 import threading
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxL
                                QMenu, QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
+from ...audio import preview
 from ...audio.resolve import SOURCE_BANK, SOURCE_MISSING, AudioIndex
 from ..widgets import SearchBar, human_size, mono_font
 
@@ -48,6 +50,12 @@ def load_index(directory: Path) -> dict:
     return {"index": idx, "banks": rows, "summary": idx.summary()}
 
 
+def decode_wem(data: bytes, source_id: int) -> Path:
+    """Worker: decode a wem to a wav in a temp folder, for playback. Raises UnsupportedError without a decoder."""
+    out = Path(tempfile.gettempdir()) / "nightrunner-audio"
+    return preview.decode_to_wav(data, out / f"{source_id}.wav")
+
+
 def resolve_bank(idx: AudioIndex, name: str) -> dict:
     """Worker: resolve one bank's sounds to where their audio lives, and name them from the registry."""
     return {"bank": name, "rows": idx.resolve_bank(name), "events": idx.event_names_by_sound(name)}
@@ -73,6 +81,10 @@ class Tab(QWidget):
         self.header = QLabel("Loading audio containers…")
         self.header.setTextInteractionFlags(Qt.TextSelectableByMouse)
         head.addWidget(self.header, 1)
+        self.btn_play = QPushButton("Play")
+        self.btn_play.setEnabled(False)
+        self.btn_play.clicked.connect(self._play_selected)
+        head.addWidget(self.btn_play)
         self.btn_export = QPushButton("Export sound…")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self._export_selected)
@@ -238,7 +250,13 @@ class Tab(QWidget):
         self.sound_count.setText(f"{len(self.rows):,} sounds")
 
     def _sound_selected(self) -> None:
-        self.btn_export.setEnabled(bool(self.sound_table.selectedItems()))
+        on = bool(self.sound_table.selectedItems())
+        self.btn_export.setEnabled(on)
+        self.btn_play.setEnabled(on and preview.available())
+        if on and not preview.available():
+            self.btn_play.setToolTip(preview.INSTALL_HINT)
+        else:
+            self.btn_play.setToolTip("Decode and play this sound")
 
     def _selected_row(self):
         items = self.sound_table.selectedItems()
@@ -253,10 +271,57 @@ class Tab(QWidget):
             return
         row = self.rows[idx.row()]
         m = QMenu(self)
+        play = m.addAction("Play", lambda: self._play(row))
+        play.setEnabled(row.found and preview.available())
+        if not preview.available():
+            play.setToolTip(preview.INSTALL_HINT)
         act = m.addAction("Export .wem…", lambda: self._export(row))
         act.setEnabled(row.found)
         m.addAction("Copy source id", lambda: QGuiApplication.clipboard().setText(str(row.source_id)))
         m.exec(self.sound_table.viewport().mapToGlobal(pos))
+
+    # ---- playback --------------------------------------------------------------------------------------------
+    def _player(self):
+        """QtMultimedia is created on first use: it pulls in a backend, and most sessions never press Play."""
+        if getattr(self, "_media", None) is None:
+            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+            self._audio_out = QAudioOutput()
+            self._media = QMediaPlayer()
+            self._media.setAudioOutput(self._audio_out)
+            self._media.errorOccurred.connect(
+                lambda _e, msg: self.ctx.status.emit(f"Playback failed: {msg}"))
+        return self._media
+
+    def _play_selected(self) -> None:
+        row = self._selected_row()
+        if row is not None:
+            self._play(row)
+
+    def _play(self, row) -> None:
+        if not row.found:
+            QMessageBox.information(self, TITLE, "That sound's audio is not in this install's containers.")
+            return
+        data = self.index.read_audio(row)
+        if data is None:
+            QMessageBox.warning(self, TITLE, "Could not read that sound's audio.")
+            return
+        self.btn_play.setEnabled(False)
+        self.ctx.runner.submit(("audio", "decode"), decode_wem, data, row.source_id,
+                               on_done=self._on_decoded,
+                               on_error=lambda exc: self._on_decode_failed(exc))
+
+    def _on_decoded(self, wav: Path) -> None:
+        from PySide6.QtCore import QUrl
+        self.btn_play.setEnabled(bool(self.sound_table.selectedItems()) and preview.available())
+        p = self._player()
+        p.stop()
+        p.setSource(QUrl.fromLocalFile(str(wav)))
+        p.play()
+        self.ctx.status.emit(f"Playing {wav.name}")
+
+    def _on_decode_failed(self, exc) -> None:
+        self.btn_play.setEnabled(bool(self.sound_table.selectedItems()) and preview.available())
+        QMessageBox.information(self, TITLE, str(exc))
 
     # ---- export ----------------------------------------------------------------------------------------------
     def _export_selected(self) -> None:
@@ -282,6 +347,12 @@ class Tab(QWidget):
 
     # ---- lifecycle -------------------------------------------------------------------------------------------
     def shutdown(self) -> None:
+        if getattr(self, "_media", None) is not None:
+            from PySide6.QtCore import QUrl
+            self._media.stop()
+            self._media.setSource(QUrl())          # drops the wav handle; Windows keeps it open otherwise
+            self._media = None
+            self._audio_out = None
         if self.index is not None:
             self.index.close()
             self.index = None

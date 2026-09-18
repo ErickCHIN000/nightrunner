@@ -6,15 +6,17 @@ end re-measures the numbers `notes/FORMATS/aesp.md` claims, against the shipped 
 from __future__ import annotations
 
 import contextlib
+import os
 import struct
+import tempfile
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nightrunner.audio import aesp, bnk, pinhead, resolve  # noqa: E402
-from nightrunner.errors import FormatError  # noqa: E402
+from nightrunner.audio import aesp, bnk, pinhead, preview, resolve  # noqa: E402
+from nightrunner.errors import FormatError, UnsupportedError  # noqa: E402
 from tests.paths import have_game  # noqa: E402
 from tests.synth import tmpdir  # noqa: E402
 
@@ -25,6 +27,7 @@ def tmproot(prefix: str):
     with tmpdir(prefix) as d:
         yield Path(d)
 
+NL = chr(10)
 AUDIO = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Dying Light The Beast\ph_ft\work\data\audio")
 
 
@@ -502,3 +505,119 @@ class ResolveCorpusTests(unittest.TestCase):
             evs = idx.events_for_preload(1962405007)
             self.assertEqual(len(evs), 39)
             self.assertTrue(all(aesp.wwise_id(e.name) in by_id for e in evs))
+
+
+# ---- preview ------------------------------------------------------------------------------------------------
+
+def riff(codec: int = 0xFFFF, channels: int = 2, rate: int = 44100, data: bytes = b"\0" * 16) -> bytes:
+    fmt = struct.pack("<HHIIHH", codec, channels, rate, rate * 4, 4, 16)
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(data)) + data
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+class WemInfoTests(unittest.TestCase):
+    def test_reads_the_fmt_chunk(self):
+        info = preview.read_info(riff())
+        self.assertEqual((info.codec, info.channels, info.sample_rate), (0xFFFF, 2, 44100))
+        self.assertTrue(info.is_wwise_vorbis)
+        self.assertEqual(info.data_bytes, 16)
+
+    def test_every_shipped_wem_is_wwise_vorbis(self):
+        """census 2026-09-17: 302/302 sfx and 321/321 streams members sampled carry codec 0xFFFF."""
+        self.assertEqual(preview.WWISE_VORBIS, 0xFFFF)
+        self.assertTrue(preview.read_info(riff(0xFFFF)).is_wwise_vorbis)
+        self.assertFalse(preview.read_info(riff(0x0001)).is_wwise_vorbis)
+
+    def test_not_riff(self):
+        self.assertIsNone(preview.read_info(b"BKHD\0\0\0\0"))
+        self.assertIsNone(preview.read_info(b""))
+
+    def test_riff_without_a_fmt_chunk(self):
+        body = b"WAVE" + b"data" + struct.pack("<I", 4) + b"abcd"
+        self.assertIsNone(preview.read_info(b"RIFF" + struct.pack("<I", len(body)) + body))
+
+
+class DecoderTests(unittest.TestCase):
+    """The decoder is external, so these drive a stub executable rather than needing vgmstream installed."""
+
+    def stub(self, d: Path, *, ok: bool = True) -> Path:
+        """A tiny Python 'decoder' invoked as [exe, -o, out, in]."""
+        script = d / "stub_decoder.py"
+        script.write_text(NL.join([
+            "import sys, pathlib",
+            "out = sys.argv[sys.argv.index('-o') + 1]",
+            f"ok = {ok!r}",
+            "if not ok:",
+            "    print('stub refused', file=sys.stderr); sys.exit(3)",
+            "src = pathlib.Path(sys.argv[-1]).read_bytes()",
+            "pathlib.Path(out).write_bytes(b'RIFFdecoded' + src[:4])",
+        ]), encoding="utf-8")
+        exe = d / "run_decoder.cmd"
+        exe.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+        return exe
+
+    def test_decodes_through_the_external_tool(self):
+        with tmproot("wem_decode") as d:
+            out = preview.decode_to_wav(riff(), d / "out.wav", decoder=self.stub(d))
+            self.assertTrue(out.is_file())
+            self.assertTrue(out.read_bytes().startswith(b"RIFFdecoded"))
+
+    def test_a_failing_decoder_reports_its_own_message(self):
+        with tmproot("wem_fail") as d:
+            with self.assertRaises(UnsupportedError) as cm:
+                preview.decode_to_wav(riff(), d / "out.wav", decoder=self.stub(d, ok=False))
+        self.assertIn("refused", str(cm.exception))
+
+    def test_a_missing_decoder_names_what_is_needed(self):
+        with tmproot("wem_missing") as d:
+            with self.assertRaises(UnsupportedError) as cm:
+                preview.decode_to_wav(riff(), d / "out.wav", decoder=d / "nope.exe")
+        self.assertIn("could not run", str(cm.exception).casefold())
+
+    def test_no_decoder_at_all_refuses_with_the_hint(self):
+        old = os.environ.pop(preview.ENV_VAR, None)
+        real_which = preview.shutil.which
+        preview.shutil.which = lambda name: None
+        try:
+            self.assertIsNone(preview.find_decoder())
+            with tmproot("wem_none") as d:
+                with self.assertRaises(UnsupportedError) as cm:
+                    preview.decode_to_wav(riff(), d / "out.wav")
+            self.assertIn("vgmstream", str(cm.exception))
+            self.assertIn(preview.ENV_VAR, str(cm.exception))
+        finally:
+            preview.shutil.which = real_which
+            if old is not None:
+                os.environ[preview.ENV_VAR] = old
+
+    def test_env_var_wins(self):
+        with tmproot("wem_env") as d:
+            exe = self.stub(d)
+            os.environ[preview.ENV_VAR] = str(exe)
+            try:
+                self.assertEqual(preview.find_decoder(), exe)
+                self.assertTrue(preview.available())
+            finally:
+                os.environ.pop(preview.ENV_VAR, None)
+
+    def test_the_temp_wem_is_cleaned_up(self):
+        before = set(Path(tempfile.gettempdir()).glob("*.wem"))
+        with tmproot("wem_tmp") as d:
+            preview.decode_to_wav(riff(), d / "out.wav", decoder=self.stub(d))
+        self.assertEqual(set(Path(tempfile.gettempdir()).glob("*.wem")) - before, set())
+
+    def test_the_old_generic_name_is_not_searched_for_on_path(self):
+        """Git for Windows ships usr/bin/test.exe. Finding that would make Play look available and then fail."""
+        self.assertIn("test.exe", preview.EXE_NAMES)
+        self.assertNotIn("test.exe", preview.PATH_NAMES)
+        seen = []
+        real = preview.shutil.which
+        preview.shutil.which = lambda name: seen.append(name) or None
+        old = os.environ.pop(preview.ENV_VAR, None)
+        try:
+            preview.find_decoder()
+        finally:
+            preview.shutil.which = real
+            if old is not None:
+                os.environ[preview.ENV_VAR] = old
+        self.assertEqual(seen, list(preview.PATH_NAMES))
