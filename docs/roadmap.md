@@ -66,25 +66,43 @@ extract, replace a `.wem`, patch the bank, patch the `wwisepinhead` registry, an
 follow; it is (B)-tier evidence, to be re-verified rather than trusted, and one of its assumptions already does
 not hold on this game — see below.
 
-**What must be answered before writing anything.**
+**How modding it actually works.** The author of UTM-AIO (ODST) described the technique, and the shipped data
+backs it up. Banks are Wwise version 150, and every Sound object carries a stream-type byte: 0 embedded,
+1 prefetch, 2 streamed. The game embeds nearly everything — 68,874 embedded against 239 prefetch and 217 streamed
+across 69,330 Sound objects. Flipping that one byte from 0 to 2 makes the engine fetch the audio from the stream
+store instead of from inside the bank, so the bank keeps its exact size and layout and never has to be rebuilt.
+The replacement `.wem` is supplied in a small separate `.aesp` alongside a patched `meta.aesp`; the 2.2 GB `sfx`
+and 6.6 GB `streams` containers are left alone.
 
-1. The u32 at entry +0x80 is called a CRC by the other tool but its algorithm is not identified and this project
-   has not reproduced it. If the engine validates it, no rebuilt container will load. This is the first thing to
-   settle.
-2. Whether the engine tolerates a member whose size changed, or requires the payload region to stay contiguous.
-   The whole injection strategy rests on the answer.
+That patching is his own invention rather than anything wwiser does, and he reports it works universally as far
+as he has tested. He deliberately stopped there: real bank editing "has much more potential" but was skipped
+"because it is hard to simplify … banks are complicated and nested".
+
+**What is settled.** The AESP container is fully measured, and the field the other tool calls a CRC turned out to
+be the Wwise id — the numeric name for `sfx`/`streams` members, the FNV-1 hash of the lowercased name for banks,
+reproduced on 30,170/30,172 members. A writer can compute it, so building a container from scratch is not
+blocked. Bank parsing is also in reach: all 123 banks walk cleanly to their exact end, on one Wwise version.
+
+**What is still open.**
+
+1. Whether `mods/audio/` is a real engine path and how an extra `.aesp` is mounted. The entire delivery mechanism
+   rests on this, and it is the audio equivalent of the numbered-pack convention — confirmed by someone else's
+   testing, not by reading the engine.
+2. `.bnk` beyond the chunk and object walk: the rest of a Sound body, the other 18 object types, `DIDX`/`DATA`
+   pairing. Needed for anything past stream-type patching.
 3. `PinheadPatcher` rewrites a `<File id="...">` whitelist inside each `<Preload>`. DLTB's shipped registry has
-   **no `<File>` elements at all** — 0 of 128 preloads. Either that is a Dying Light 2 shape or the tool adds it
-   and the engine tolerates it. Untested here.
+   **no `<File>` elements at all** — 0 of 128 preloads. Either a Dying Light 2 shape, or something the tool adds
+   and the engine tolerates.
 4. Converting user audio into a `.wem` needs a Wwise-format encoder. UTM-AIO ships ffmpeg for it. This project
-   allows stdlib, numpy and Pillow only, so an encoder is a deliberate dependency decision, not a quiet import —
-   the same call that was made for BC textures, where the answer was to refuse and point at an external tool.
-5. `<data>/work/data_lang/speech_en/` exists and has not been looked at.
+   allows stdlib, numpy and Pillow only, so that is a deliberate dependency decision — the same call already made
+   for BC textures, where the answer was to refuse and point at an external tool.
+5. `<data>/work/data_lang/speech_en/` has not been looked at.
 
-**A reasonable first slice** is read-only and answers none of the hard questions but makes the rest possible: an
-AESP reader, the registry parsed into names, and extraction of banks and `.wem` to disk. That is squarely within
-what this project already does well, has no dependency problem, and would let the Audio tab list and export
-audio long before anything can be injected. Writing comes after E2 and E3 are settled.
+**A reasonable first slice** is read-only and needs none of the above settled: an AESP reader, the registry
+parsed into names, a bank chunk/HIRC walk, and extraction of banks and `.wem` to disk. It is squarely what this
+project already does well, has no dependency problem, and would let an Audio tab list, search and export audio —
+23,904 named events make that genuinely useful on its own. Stream-type patching is a small step after it; real
+bank editing is the frontier ODST left open.
 
 ## GUI modding
 
