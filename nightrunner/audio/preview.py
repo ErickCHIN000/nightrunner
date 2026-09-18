@@ -11,11 +11,20 @@ itself. Instead it drives **vgmstream**, which handles Wwise Vorbis natively, an
 what is missing when vgmstream is not installed — the same call already made for BC textures, where the answer
 was to point at `texconv` rather than ship an encoder.
 
-vgmstream is found by, in order: `$NIGHTRUNNER_VGMSTREAM`, a `vgmstream-cli` / `test.exe` next to this install,
-then `PATH`. Nothing is ever downloaded.
+Two backends, tried in that order:
+
+1. **pyvgmstream**, if the user has installed it — a binding that decodes bytes to wav bytes in memory, no
+   temporary files and no executable. It is *not* a dependency of this project and is never installed here: it
+   ships as a compiled wheel, declares no licence on GitHub or PyPI, and its PyPI metadata carries no link back
+   to the repository, so whether to trust it is the user's decision to make deliberately.
+2. **vgmstream-cli**, found via `$NIGHTRUNNER_VGMSTREAM`, then beside this install, then `PATH`.
+
+Nothing is ever downloaded.
 """
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import os
 import shutil
 import struct
@@ -40,9 +49,12 @@ ENV_VAR = "NIGHTRUNNER_VGMSTREAM"
 #: WAVE format tag of every wem in these games. 0xFFFF is "extensible/other"; here it means Wwise Vorbis.
 WWISE_VORBIS = 0xFFFF
 
-INSTALL_HINT = ("No vgmstream found. Put vgmstream-cli on PATH or set "
-                f"{ENV_VAR} to it — it is the only decoder that reads Wwise Vorbis "
-                "(ffmpeg cannot). Nothing is downloaded for you.")
+#: The optional in-process backend. Not a dependency: `pip install pyvgmstream` is the user's own call.
+PY_MODULE = "pyvgmstream"
+
+INSTALL_HINT = ("No Wwise Vorbis decoder found. Either put vgmstream-cli on PATH (or set "
+                f"{ENV_VAR} to it), or install the optional {PY_MODULE} package. ffmpeg cannot decode these "
+                "files. Nothing is downloaded for you.")
 
 
 @dataclass
@@ -99,8 +111,38 @@ def find_decoder() -> Path | None:
     return None
 
 
+def have_pyvgmstream() -> bool:
+    """Whether the optional in-process backend is importable. Checked without importing it."""
+    try:
+        return importlib.util.find_spec(PY_MODULE) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def decode_in_process(wem: bytes) -> bytes:
+    """wav bytes via pyvgmstream. Raises `UnsupportedError` when it is absent or refuses."""
+    if not have_pyvgmstream():
+        raise UnsupportedError(INSTALL_HINT)
+    try:
+        mod = importlib.import_module(PY_MODULE)
+        return bytes(mod.convert(wem, "wem"))
+    except UnsupportedError:
+        raise
+    except Exception as exc:                       # a third-party backend must not take the tab down
+        raise UnsupportedError(f"{PY_MODULE} could not decode this sound: {type(exc).__name__}: {exc}") from exc
+
+
 def available() -> bool:
-    return find_decoder() is not None
+    """Whether anything can decode a wem here."""
+    return have_pyvgmstream() or find_decoder() is not None
+
+
+def backend() -> str:
+    """Which backend a decode would use, for the UI to report. "none" when there is nothing."""
+    if have_pyvgmstream():
+        return PY_MODULE
+    exe = find_decoder()
+    return exe.name if exe is not None else "none"
 
 
 def decode_to_wav(wem: bytes, out_wav: Path, decoder: Path | None = None, timeout: float = 60.0) -> Path:
@@ -109,6 +151,11 @@ def decode_to_wav(wem: bytes, out_wav: Path, decoder: Path | None = None, timeou
     The bytes are written to a temporary `.wem` first: vgmstream takes a path, and the member inside a container
     has no file of its own.
     """
+    if decoder is None and have_pyvgmstream():
+        out_wav = Path(out_wav)
+        out_wav.parent.mkdir(parents=True, exist_ok=True)
+        out_wav.write_bytes(decode_in_process(wem))
+        return out_wav
     exe = decoder or find_decoder()
     if exe is None:
         raise UnsupportedError(INSTALL_HINT)

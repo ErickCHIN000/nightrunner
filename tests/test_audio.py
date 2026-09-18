@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import types
 import struct
 import tempfile
 import sys
@@ -537,35 +538,36 @@ class WemInfoTests(unittest.TestCase):
         self.assertIsNone(preview.read_info(b"RIFF" + struct.pack("<I", len(body)) + body))
 
 
+def stub_decoder(d: Path, *, ok: bool = True) -> Path:
+    """A tiny Python 'decoder' invoked as [exe, -o, out, in], so the tests need no vgmstream."""
+    script = d / "stub_decoder.py"
+    script.write_text(NL.join([
+        "import sys, pathlib",
+        "out = sys.argv[sys.argv.index('-o') + 1]",
+        f"ok = {ok!r}",
+        "if not ok:",
+        "    print('stub refused', file=sys.stderr); sys.exit(3)",
+        "src = pathlib.Path(sys.argv[-1]).read_bytes()",
+        "pathlib.Path(out).write_bytes(b'RIFFdecoded' + src[:4])",
+    ]), encoding="utf-8")
+    exe = d / "run_decoder.cmd"
+    exe.write_text(f'@"{sys.executable}" "{script}" %*' + NL, encoding="utf-8")
+    return exe
+
+
 class DecoderTests(unittest.TestCase):
     """The decoder is external, so these drive a stub executable rather than needing vgmstream installed."""
 
-    def stub(self, d: Path, *, ok: bool = True) -> Path:
-        """A tiny Python 'decoder' invoked as [exe, -o, out, in]."""
-        script = d / "stub_decoder.py"
-        script.write_text(NL.join([
-            "import sys, pathlib",
-            "out = sys.argv[sys.argv.index('-o') + 1]",
-            f"ok = {ok!r}",
-            "if not ok:",
-            "    print('stub refused', file=sys.stderr); sys.exit(3)",
-            "src = pathlib.Path(sys.argv[-1]).read_bytes()",
-            "pathlib.Path(out).write_bytes(b'RIFFdecoded' + src[:4])",
-        ]), encoding="utf-8")
-        exe = d / "run_decoder.cmd"
-        exe.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
-        return exe
-
     def test_decodes_through_the_external_tool(self):
         with tmproot("wem_decode") as d:
-            out = preview.decode_to_wav(riff(), d / "out.wav", decoder=self.stub(d))
+            out = preview.decode_to_wav(riff(), d / "out.wav", decoder=stub_decoder(d))
             self.assertTrue(out.is_file())
             self.assertTrue(out.read_bytes().startswith(b"RIFFdecoded"))
 
     def test_a_failing_decoder_reports_its_own_message(self):
         with tmproot("wem_fail") as d:
             with self.assertRaises(UnsupportedError) as cm:
-                preview.decode_to_wav(riff(), d / "out.wav", decoder=self.stub(d, ok=False))
+                preview.decode_to_wav(riff(), d / "out.wav", decoder=stub_decoder(d, ok=False))
         self.assertIn("refused", str(cm.exception))
 
     def test_a_missing_decoder_names_what_is_needed(self):
@@ -592,7 +594,7 @@ class DecoderTests(unittest.TestCase):
 
     def test_env_var_wins(self):
         with tmproot("wem_env") as d:
-            exe = self.stub(d)
+            exe = stub_decoder(d)
             os.environ[preview.ENV_VAR] = str(exe)
             try:
                 self.assertEqual(preview.find_decoder(), exe)
@@ -603,7 +605,7 @@ class DecoderTests(unittest.TestCase):
     def test_the_temp_wem_is_cleaned_up(self):
         before = set(Path(tempfile.gettempdir()).glob("*.wem"))
         with tmproot("wem_tmp") as d:
-            preview.decode_to_wav(riff(), d / "out.wav", decoder=self.stub(d))
+            preview.decode_to_wav(riff(), d / "out.wav", decoder=stub_decoder(d))
         self.assertEqual(set(Path(tempfile.gettempdir()).glob("*.wem")) - before, set())
 
     def test_the_old_generic_name_is_not_searched_for_on_path(self):
@@ -621,3 +623,57 @@ class DecoderTests(unittest.TestCase):
             if old is not None:
                 os.environ[preview.ENV_VAR] = old
         self.assertEqual(seen, list(preview.PATH_NAMES))
+
+
+class PyVgmstreamBackendTests(unittest.TestCase):
+    """The optional in-process backend. Never installed by this project, so these tests stub the module."""
+
+    def install_stub(self, convert):
+        mod = types.ModuleType(preview.PY_MODULE)
+        mod.convert = convert
+        sys.modules[preview.PY_MODULE] = mod
+        self.addCleanup(lambda: sys.modules.pop(preview.PY_MODULE, None))
+        real = preview.importlib.util.find_spec
+        preview.importlib.util.find_spec = lambda name: object() if name == preview.PY_MODULE else real(name)
+        self.addCleanup(lambda: setattr(preview.importlib.util, "find_spec", real))
+        return mod
+
+    def test_absent_by_default_in_this_project(self):
+        """It is not a dependency: a clean checkout must not find it."""
+        self.assertNotIn(preview.PY_MODULE, {d.lower() for d in ("numpy", "pillow", "pyside6")})
+
+    def test_decodes_in_memory_when_present(self):
+        seen = []
+        self.install_stub(lambda data, ext: seen.append((data[:4], ext)) or b"RIFFwav-from-module")
+        self.assertTrue(preview.have_pyvgmstream())
+        self.assertTrue(preview.available())
+        self.assertEqual(preview.backend(), preview.PY_MODULE)
+        self.assertEqual(preview.decode_in_process(riff()), b"RIFFwav-from-module")
+        self.assertEqual(seen, [(b"RIFF", "wem")])
+
+    def test_preferred_over_the_executable(self):
+        self.install_stub(lambda data, ext: b"RIFFfrom-module")
+        with tmproot("wem_pref") as d:
+            out = preview.decode_to_wav(riff(), d / "out.wav")
+            self.assertEqual(out.read_bytes(), b"RIFFfrom-module")
+
+    def test_an_explicit_decoder_still_wins(self):
+        """Passing a decoder explicitly must not be silently overridden by the module."""
+        self.install_stub(lambda data, ext: b"RIFFfrom-module")
+        with tmproot("wem_explicit") as d:
+            out = preview.decode_to_wav(riff(), d / "out.wav", decoder=stub_decoder(d))
+            self.assertTrue(out.read_bytes().startswith(b"RIFFdecoded"))
+
+    def test_a_raising_backend_becomes_an_unsupported_error(self):
+        def boom(data, ext):
+            raise ValueError("bad stream")
+        self.install_stub(boom)
+        with self.assertRaises(UnsupportedError) as cm:
+            preview.decode_in_process(riff())
+        self.assertIn("bad stream", str(cm.exception))
+        self.assertIn(preview.PY_MODULE, str(cm.exception))
+
+    def test_the_hint_names_both_routes(self):
+        self.assertIn(preview.PY_MODULE, preview.INSTALL_HINT)
+        self.assertIn("vgmstream-cli", preview.INSTALL_HINT)
+        self.assertIn(preview.ENV_VAR, preview.INSTALL_HINT)

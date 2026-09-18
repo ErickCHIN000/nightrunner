@@ -256,7 +256,7 @@ class Tab(QWidget):
         if on and not preview.available():
             self.btn_play.setToolTip(preview.INSTALL_HINT)
         else:
-            self.btn_play.setToolTip("Decode and play this sound")
+            self.btn_play.setToolTip(f"Decode and play this sound (via {preview.backend()})")
 
     def _selected_row(self):
         items = self.sound_table.selectedItems()
