@@ -18,13 +18,14 @@ Tabs are grouped. The outer bar picks a section; the tabs of that section sit be
 |---|---|
 | **RPACK** | Raw, Textures, Meshes, Models, Build |
 | **SDB** | SDB |
+| **AUDIO** | Audio |
 
 A section holding a single tab shows that tab directly, with no second bar to switch between one thing. Opening
 something from another tab crosses sections on its own: double-clicking a material anywhere lands on SDB, and
 double-clicking a mesh from there comes back to Meshes. The window reopens on whichever tab you left it on, by
 name.
 
-More sections are planned - audio (Wwise), GUI modding and data PAK work, plus writing for SDB. See
+More sections are planned - GUI modding and data PAK work, plus writing for SDB and audio. See
 [roadmap.md](roadmap.md).
 
 Common to all tabs:
@@ -202,3 +203,27 @@ so an empty entry never silently reads as "nothing uses this".
 Expect roughly 110 MB for the materials file on Dying Light: The Beast, 15 MB for textures and 1.3 MB for
 presets, in about 15 seconds. The two large files are written compact because indenting them doubles the size of
 something nobody scrolls through by hand; pipe them through `jq` when you want to read one.
+
+## Audio
+
+Read-only. The Wwise audio of an install: four `.aesp` containers holding soundbanks, the `wwisepinhead` registry
+and ~30,000 `.wem` files.
+
+Left: every soundbank, or every named event in the registry, with a search box. Right: the sounds of the selected
+bank. For each one you get its source id, its stream type, **where its audio actually lives**, the size, and the
+event that plays it.
+
+That third column is the useful one. A sound's audio is either baked into the bank's own `DIDX`/`DATA` or stored
+as a member of `sfx.aesp` / `streams.aesp` — and which it is decides what replacing it would take. Most sounds
+are not in their bank: of 69,330 across the shipped banks, 43,017 resolve out of `sfx.aesp` and 23,340 are baked
+in.
+
+Event names come from the registry, joined through the bank: the Wwise object id is the hash of the event name,
+and the event's action points at a Sound. Where the action points at a random or sequence container instead, the
+sound is left unnamed rather than guessed at — that is about three quarters of them.
+
+Right-click or **Export sound…** writes the `.wem` out. There is no import: see [roadmap.md](roadmap.md) for what
+injection still needs.
+
+Finding the main menu audio, as a worked example: search `menu`, pick the `menu` bank, and its 33 sounds come up
+named — `menu_crafting`, `menu_upgrade`, `blocked_slot` and the rest — each pointing at an `sfx.aesp` member.

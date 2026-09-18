@@ -5,6 +5,7 @@ end re-measures the numbers `notes/FORMATS/aesp.md` claims, against the shipped 
 """
 from __future__ import annotations
 
+import contextlib
 import struct
 import sys
 import unittest
@@ -12,10 +13,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nightrunner.audio import aesp, bnk, pinhead  # noqa: E402
+from nightrunner.audio import aesp, bnk, pinhead, resolve  # noqa: E402
 from nightrunner.errors import FormatError  # noqa: E402
 from tests.paths import have_game  # noqa: E402
 from tests.synth import tmpdir  # noqa: E402
+
+
+@contextlib.contextmanager
+def tmproot(prefix: str):
+    """tests.synth.tmpdir yields a str; everything here wants a Path."""
+    with tmpdir(prefix) as d:
+        yield Path(d)
 
 AUDIO = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Dying Light The Beast\ph_ft\work\data\audio")
 
@@ -376,3 +384,121 @@ class CorpusTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- the join -----------------------------------------------------------------------------------------------
+
+class ResolveTests(unittest.TestCase):
+    """AudioIndex joins banks to containers. Built on disk because AudioIndex opens files by name."""
+
+    def build(self, d: Path, *, bank_objects, didx=(), sfx=(), streams=(), registry: str | None = None):
+        extra = []
+        if didx:
+            idx, data = bytearray(), bytearray()
+            for wid, blob in didx:
+                idx += struct.pack("<III", wid, len(data), len(blob))
+                data += blob
+            extra = [(bnk.DIDX, bytes(idx)), (bnk.DATA, bytes(data))]
+        members = [("mybank", make_bank(bank_objects, extra=extra))]
+        if registry:
+            members.append((pinhead.MEMBER_NAME, registry.encode()))
+        (d / "meta.aesp").write_bytes(make_aesp(members, name="meta"))
+        (d / "sfx.aesp").write_bytes(make_aesp([(str(i), b) for i, b in sfx], name="sfx"))
+        (d / "streams.aesp").write_bytes(make_aesp([(str(i), b) for i, b in streams], name="streams"))
+        return resolve.AudioIndex(d)
+
+    def test_resolves_each_sound_to_its_store(self):
+        with tmproot("resolve") as d:
+            with self.build(d,
+                            bank_objects=[sound_object(1, 100, bnk.STREAM_EMBEDDED),
+                                          sound_object(2, 200, bnk.STREAM_STREAMED),
+                                          sound_object(3, 300, bnk.STREAM_EMBEDDED),
+                                          sound_object(4, 999, bnk.STREAM_EMBEDDED)],
+                            didx=[(300, b"BAKED")],
+                            sfx=[(100, b"SFXDATA")],
+                            streams=[(200, b"STREAMDATA")]) as idx:
+                got = {r.source_id: r.source for r in idx.resolve_bank("mybank")}
+        self.assertEqual(got, {100: resolve.SOURCE_SFX, 200: resolve.SOURCE_STREAMS,
+                               300: resolve.SOURCE_BANK, 999: resolve.SOURCE_MISSING})
+
+    def test_reads_audio_from_wherever_it_lives(self):
+        with tmproot("resolve_read") as d:
+            with self.build(d,
+                            bank_objects=[sound_object(1, 100, 0), sound_object(2, 200, 2), sound_object(3, 300, 0),
+                                          sound_object(4, 999, 0)],
+                            didx=[(300, b"BAKED")], sfx=[(100, b"SFXDATA")], streams=[(200, b"STREAMDATA")]) as idx:
+                by_id = {r.source_id: r for r in idx.resolve_bank("mybank")}
+                self.assertEqual(idx.read_audio(by_id[100]), b"SFXDATA")
+                self.assertEqual(idx.read_audio(by_id[200]), b"STREAMDATA")
+                self.assertEqual(idx.read_audio(by_id[300]), b"BAKED")
+                self.assertIsNone(idx.read_audio(by_id[999]))
+
+    def test_in_bank_flag_marks_what_needs_the_stream_type_flip(self):
+        with tmproot("resolve_flag") as d:
+            with self.build(d, bank_objects=[sound_object(1, 300, 0), sound_object(2, 100, 0)],
+                            didx=[(300, b"X")], sfx=[(100, b"Y")]) as idx:
+                rows = {r.source_id: r for r in idx.resolve_bank("mybank")}
+        self.assertTrue(rows[300].in_bank)
+        self.assertFalse(rows[100].in_bank)
+
+    def test_didx_ids(self):
+        b = bnk.Bank(make_bank([], extra=[(bnk.DIDX, struct.pack("<III", 7, 0, 3)), (bnk.DATA, b"abc")]), "b")
+        self.assertEqual(resolve.didx_ids(b), {7: (0, 3)})
+        self.assertEqual(resolve.didx_ids(bnk.Bank(make_bank([]), "b")), {})
+
+    def test_event_names_come_from_the_name_hash(self):
+        """The registry's <Event id> is Techland's; the Wwise object id is the hash of the name."""
+        ev_name = "menu_back"
+        ev_id = aesp.wwise_id(ev_name)
+        action_id = 5555
+        sound_id = 42
+        event_body = struct.pack("<I", ev_id) + bytes([1]) + struct.pack("<I", action_id)
+        event_obj = bytes([resolve.OBJECT_EVENT]) + struct.pack("<I", len(event_body)) + event_body
+        action_body = struct.pack("<IHI", action_id, 0x0403, sound_id)
+        action_obj = bytes([resolve.OBJECT_ACTION]) + struct.pack("<I", len(action_body)) + action_body
+        registry = ('<?xml version="1.0"?><Mapping Version="768"><Preloads>'
+                    '<Preload name="mybank" id="1"><FileData name="mybank.bnk" /></Preload></Preloads>'
+                    f'<Events><Event name="{ev_name}" id="777" preload_id="1" /></Events></Mapping>')
+        with tmproot("resolve_ev") as d:
+            with self.build(d, bank_objects=[sound_object(sound_id, 100, 0), event_obj, action_obj],
+                            sfx=[(100, b"A")], registry=registry) as idx:
+                names = idx.event_names_by_sound("mybank")
+        self.assertEqual(names, {sound_id: [ev_name]})
+
+    def test_an_action_pointing_at_a_container_is_not_credited_to_a_sound(self):
+        """3,198 of 14,430 actions target a Sound directly; the rest must not be attached to a guess."""
+        ev_id = aesp.wwise_id("somewhere_else")
+        event_body = struct.pack("<I", ev_id) + bytes([1]) + struct.pack("<I", 5555)
+        event_obj = bytes([resolve.OBJECT_EVENT]) + struct.pack("<I", len(event_body)) + event_body
+        action_body = struct.pack("<IHI", 5555, 0x0403, 987654)        # target is not a Sound in this bank
+        action_obj = bytes([resolve.OBJECT_ACTION]) + struct.pack("<I", len(action_body)) + action_body
+        registry = ('<?xml version="1.0"?><Mapping Version="768"><Preloads>'
+                    '<Preload name="mybank" id="1"><FileData name="mybank.bnk" /></Preload></Preloads>'
+                    '<Events><Event name="somewhere_else" id="777" preload_id="1" /></Events></Mapping>')
+        with tmproot("resolve_ev2") as d:
+            with self.build(d, bank_objects=[sound_object(42, 100, 0), event_obj, action_obj],
+                            sfx=[(100, b"A")], registry=registry) as idx:
+                self.assertEqual(idx.event_names_by_sound("mybank"), {})
+
+
+@unittest.skipUnless(have_game() and AUDIO.is_dir(), "game audio not installed")
+class ResolveCorpusTests(unittest.TestCase):
+    def test_menu_bank_is_fully_resolved_and_named(self):
+        """The main-menu case: no audio baked into the bank, every sound found, most named by an event."""
+        with resolve.AudioIndex(AUDIO) as idx:
+            rows = idx.resolve_bank("menu")
+            names = idx.event_names_by_sound("menu")
+        self.assertEqual(len(rows), 33)
+        self.assertTrue(all(r.source == resolve.SOURCE_SFX for r in rows))
+        self.assertTrue(all(r.found for r in rows))
+        self.assertGreaterEqual(len(names), 25)
+        self.assertIn("menu_crafting", {n for v in names.values() for n in v})
+
+    def test_every_event_of_a_bank_resolves_by_name_hash(self):
+        """10,833/10,833 corpus-wide; checked here on the menu preload's 39 events."""
+        with resolve.AudioIndex(AUDIO) as idx:
+            b = idx.bank("menu")
+            by_id = {o.id for o in b.objects}
+            evs = idx.events_for_preload(1962405007)
+            self.assertEqual(len(evs), 39)
+            self.assertTrue(all(aesp.wwise_id(e.name) in by_id for e in evs))

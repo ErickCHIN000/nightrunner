@@ -237,9 +237,9 @@ class Aesp:
                 "layout": self.layout()}
 
 
-def audio_dir(root: Path | str, data_dir: str) -> Path:
-    """`<root>/<data>/work/data/audio` — where the four containers live."""
-    return Path(root) / data_dir / "work" / "data" / "audio"
+def audio_dir(data: Path | str) -> Path:
+    """`<data>/work/data/audio` — where the four containers live. *data* is `GameInstall.data`."""
+    return Path(data) / "work" / "data" / "audio"
 
 
 def open_all(directory: Path | str) -> dict[str, Aesp]:

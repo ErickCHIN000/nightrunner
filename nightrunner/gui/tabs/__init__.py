@@ -13,6 +13,7 @@ and adding a row here, and nothing else in the window.
 SECTIONS = (
     ("RPACK", ("raw", "textures", "meshes", "models", "build")),
     ("SDB", ("sdb",)),
+    ("AUDIO", ("audio",)),
 )
 
 #: Every tab module, in window order. Kept flat for the places that only care about the set of tabs.
