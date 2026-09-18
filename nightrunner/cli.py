@@ -189,6 +189,11 @@ def cmd_model(a) -> int:
     return pak_cli.run(a)
 
 
+def cmd_audio(a) -> int:
+    from .audio import cli as audio_cli
+    return audio_cli.run(a)
+
+
 def cmd_types(a) -> int:
     from .types import cli as types_cli
     return types_cli.run(a)
@@ -280,6 +285,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("sdb", help="SDB material database helpers: list | material | textures | stats")
     p.add_argument("args", nargs=argparse.REMAINDER)
     p.set_defaults(fn=cmd_sdb)
+
+    p = sub.add_parser("audio", help="Wwise audio (AESP containers, soundbanks, registry): info | list | extract "
+                                     "| bank | sounds | registry | census")
+    p.add_argument("args", nargs=argparse.REMAINDER)
+    p.set_defaults(fn=cmd_audio)
 
     p = sub.add_parser("model", help=".model definition helpers (PAK): list | show | meshes | write | split")
     p.add_argument("args", nargs=argparse.REMAINDER)
