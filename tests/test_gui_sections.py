@@ -103,9 +103,85 @@ class WindowTests(unittest.TestCase):
         self.assertIsInstance(self.win.tabs.cornerWidget(), UpdateCorner)
 
     def test_the_open_tab_is_remembered_by_name(self):
-        self.win.show_tab("models")
-        self.win.settings.setValue("window/tab", self.win.current_tab_name() or "")
-        self.assertEqual(self.win.settings.value("window/tab"), "models")
+        """Against a throwaway settings object: the real one belongs to the user's installed app."""
+        from PySide6.QtCore import QSettings
+        real = self.win.settings
+        self.win.settings = QSettings(QSettings.IniFormat, QSettings.UserScope,
+                                      "nightrunner-tests", "sections-test")
+        try:
+            self.win.settings.clear()
+            self.win.show_tab("models")
+            self.win._remember_tab()
+            self.assertEqual(self.win.settings.value(self.win.TAB_KEY), "models")
+            self.assertEqual(self.win._remembered_tab(), "models")
+            self.assertEqual(int(self.win.settings.value("window/tab")), TAB_MODULES.index("models"))
+            self.win.settings.clear()
+        finally:
+            self.win.settings = real
+
+
+
+@unittest.skipUnless(HAVE_QT, "PySide6 not installed")
+class RememberedTabTests(unittest.TestCase):
+    """QSettings is per user, not per folder, so two builds on one machine share these keys.
+
+    Regression: writing a tab *name* into `window/tab` made older builds crash on startup with
+    `int('audio')`. The name now lives in its own key and `window/tab` is kept a valid index.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def win(self, values: dict):
+        from PySide6.QtWidgets import QWidget
+        from nightrunner.gui.mainwindow import MainWindow
+        w = QWidget()
+        w.settings = type("S", (), {
+            "_d": dict(values),
+            "value": lambda self, k, d=None: self._d.get(k, d),
+            "setValue": lambda self, k, v: self._d.__setitem__(k, v),
+        })()
+        w.TAB_KEY = MainWindow.TAB_KEY
+        return w
+
+    def test_prefers_the_name_key(self):
+        from nightrunner.gui.mainwindow import MainWindow
+        w = self.win({MainWindow.TAB_KEY: "sdb", "window/tab": 0})
+        self.assertEqual(MainWindow._remembered_tab(w), "sdb")
+
+    def test_reads_a_legacy_index(self):
+        from nightrunner.gui.mainwindow import MainWindow
+        w = self.win({"window/tab": 1})
+        self.assertEqual(MainWindow._remembered_tab(w), TAB_MODULES[1])
+
+    def test_tolerates_a_name_left_in_the_old_key(self):
+        """Exactly the value that crashed the older build."""
+        from nightrunner.gui.mainwindow import MainWindow
+        w = self.win({"window/tab": "audio"})
+        self.assertEqual(MainWindow._remembered_tab(w), "audio")
+
+    def test_tolerates_junk(self):
+        from nightrunner.gui.mainwindow import MainWindow
+        for junk in ("", None, "nonsense", 999):
+            w = self.win({"window/tab": junk})
+            self.assertIsInstance(MainWindow._remembered_tab(w), str)
+
+    def test_saving_keeps_the_old_key_an_integer(self):
+        from nightrunner.gui.mainwindow import MainWindow
+        w = self.win({})
+        w.current_tab_name = lambda: "audio"
+        MainWindow._remember_tab(w)
+        self.assertEqual(w.settings._d[MainWindow.TAB_KEY], "audio")
+        self.assertEqual(w.settings._d["window/tab"], TAB_MODULES.index("audio"))
+        self.assertIsInstance(w.settings._d["window/tab"], int)
+
+    def test_saving_with_no_tab_still_writes_an_integer(self):
+        from nightrunner.gui.mainwindow import MainWindow
+        w = self.win({})
+        w.current_tab_name = lambda: None
+        MainWindow._remember_tab(w)
+        self.assertEqual(w.settings._d["window/tab"], 0)
 
 
 if __name__ == "__main__":

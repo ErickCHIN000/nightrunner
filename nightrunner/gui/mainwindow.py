@@ -13,7 +13,7 @@ from .. import __version__
 from . import APP_NAME
 from ..games import PROFILES, GameInstall, detect_profile
 from .context import AppContext, detected_installs, remember_game
-from .tabs import SECTIONS
+from .tabs import SECTIONS, TAB_MODULES
 from .theme import apply_theme
 from .updater import UpdateCorner
 
@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
         g = self.settings.value("window/geometry")
         if g is not None:
             self.restoreGeometry(g)
-        if not self.show_tab(str(self.settings.value("window/tab", "") or "")):
+        if not self.show_tab(self._remembered_tab()):
             self.tabs.setCurrentIndex(0)
         if self.ctx.game is not None and ctx is None:
             remember_game(self.settings, self.ctx.game)
@@ -166,6 +166,31 @@ class MainWindow(QMainWindow):
             w.setPlainText(f"The {name} tab failed to load:\n\n{traceback.format_exc()}")
             w.TITLE = f"{name.capitalize()} (error)"
             return w
+
+    #: Settings key holding the open tab *by name*. A separate key from `window/tab`, which older builds read
+    #: with int() - writing a name there made them crash on startup, and QSettings is per user, not per folder,
+    #: so two copies of the app on one machine share it.
+    TAB_KEY = "window/tab_name"
+
+    def _remembered_tab(self) -> str:
+        """The tab to reopen. Tolerates whatever is in the old key, including a name from a build that wrote one."""
+        name = str(self.settings.value(self.TAB_KEY, "") or "")
+        if name:
+            return name
+        legacy = self.settings.value("window/tab", "")
+        try:                                    # an index from an older build
+            return TAB_MODULES[int(legacy)]
+        except (TypeError, ValueError, IndexError):
+            return str(legacy or "")            # or a name, from a build that briefly wrote one here
+
+    def _remember_tab(self) -> None:
+        """Save the open tab by name, and keep `window/tab` a valid index for builds that still read it."""
+        name = self.current_tab_name()
+        self.settings.setValue(self.TAB_KEY, name or "")
+        try:
+            self.settings.setValue("window/tab", TAB_MODULES.index(name) if name else 0)
+        except ValueError:
+            self.settings.setValue("window/tab", 0)
 
     def current_tab_name(self) -> str | None:
         """The tab module name showing now, looking inside the current section."""
@@ -337,7 +362,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         self.settings.setValue("window/geometry", self.saveGeometry())
-        self.settings.setValue("window/tab", self.current_tab_name() or "")
+        self._remember_tab()
         self._shutdown_tabs()
         self.ctx.runner.pool.waitForDone(2000)
         self.ctx.close()
