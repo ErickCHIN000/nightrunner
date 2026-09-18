@@ -940,3 +940,24 @@ class SwapTests(unittest.TestCase):
             second = build.back_up(src, ["sfx.aesp"], dst)
             self.assertIn("skipped", second["sfx.aesp"])
             self.assertEqual((dst / "sfx.aesp").read_bytes(), b"original")
+
+
+class DuplicateMemberTests(unittest.TestCase):
+    """sfx.aesp holds 26,517 members under 24,890 names, so an id can name more than one (E14)."""
+
+    def test_a_duplicate_id_is_refused_rather_than_guessed(self):
+        with tmproot("aesp_dup") as d:
+            audio = d / "audio"
+            audio.mkdir()
+            (audio / "sfx.aesp").write_bytes(build.build_container(
+                [build.Entry("747664", b"A" * 8), build.Entry("747664", b"B" * 8)], "sfx"))
+            entries = [build.Entry("747664", b"A" * 8), build.Entry("747664", b"B" * 8)]
+            with aesp.Aesp.open(audio / "sfx.aesp") as c:
+                found = [e for e in build.entries_of(c) if e.member_id() == aesp.expected_id("747664")]
+            self.assertEqual(len(found), 2)                 # the shape that must not be resolved silently
+
+    def test_the_writer_keeps_duplicates_in_order(self):
+        blob = build.build_container([build.Entry("747664", b"A"), build.Entry("747664", b"BB")], "sfx")
+        a = aesp.Aesp(memoryview(blob), "t.aesp")
+        self.assertEqual([bytes(a.read(m)) for m in a], [b"A", b"BB"])
+        self.assertEqual(len({m.id for m in a}), 1)

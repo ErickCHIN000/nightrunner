@@ -247,12 +247,17 @@ def apply_swaps(audio_dir: Path | str, out_dir: Path | str, swaps: list[Swap], *
                 progress(f"rebuilding {src.name}")
             with Aesp.open(src) as c:
                 entries = entries_of(c)
-                by_id = {e.member_id(): e for e in entries}
                 for sid, data in replacements.items():
-                    target = by_id.get(sid)
-                    if target is None:
+                    hits = [e for e in entries if e.member_id() == sid]
+                    if not hits:
                         raise BuildError(f"{src.name}: no member with id {sid}")
-                    target.data = data
+                    if len(hits) > 1:
+                        # census 2026-09-18: sfx.aesp holds 26,517 members under 24,890 distinct names, so
+                        # 1,560 ids appear more than once. Which one the engine resolves is not known (E14),
+                        # so a duplicate is refused rather than silently resolved to one of them.
+                        raise BuildError(f"{src.name}: {len(hits)} members share id {sid}; which one the engine "
+                                         "uses is undecoded, so this swap is refused")
+                    hits[0].data = data
                 blob = build_container(entries, c.name, header=bytes(c.header_raw))
             dest = out_dir / src.name
             dest.write_bytes(blob)
