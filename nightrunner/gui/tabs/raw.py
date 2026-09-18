@@ -424,6 +424,7 @@ class Tab(QWidget):
         state = m.check_state(idx)
         on = state != Qt.Checked
         menu.addAction("Check" if on else "Uncheck", lambda: m.set_checked(idx, on))
+        menu.addAction("Export This…", lambda: self.export_rows_dialog([idx]))
         menu.addAction("Export Selected…", self.export_selected_dialog)
         menu.addSeparator()
         if m.hasChildren(idx):
@@ -470,9 +471,13 @@ class Tab(QWidget):
             self.start_export(spec, out)
 
     def export_selected_dialog(self) -> None:
+        self.export_rows_dialog([i for i in self.view.selectionModel().selectedRows(0)])
+
+    def export_rows_dialog(self, rows) -> None:
+        """Export exactly *rows*. The context menu passes the row under the cursor, so a right-click exports what
+        was clicked rather than whatever happened to be selected."""
         if self._busy_msg():
             return
-        rows = [i for i in self.view.selectionModel().selectedRows(0)]
         if not rows:
             return
         single = self._single_file(rows)

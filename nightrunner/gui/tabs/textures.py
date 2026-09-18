@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QEvent, QItemSelectionModel, QModelIndex, QObject, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QImage, QPixmap
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
                                QListView, QMenu, QMessageBox, QProgressBar, QPushButton, QSplitter, QStackedWidget,
                                QStyle, QStyledItemDelegate, QStyleOptionButton, QTableView, QTextBrowser,
@@ -371,6 +371,9 @@ class Tab(QWidget):
         self.grid.setLayoutMode(QListView.Batched)
         self.grid.setBatchSize(2000)
         self.grid.setGridSize(QSize(THUMB + 16, THUMB + 34))
+        for v in (self.table, self.grid):
+            v.setContextMenuPolicy(Qt.CustomContextMenu)
+            v.customContextMenuRequested.connect(lambda pos, w=v: self._row_menu(w, pos))
         self.grid.setSpacing(0)
         self.grid.setSelectionMode(QAbstractItemView.SingleSelection)
         self._delegate = _ThumbDelegate(self)
@@ -758,9 +761,37 @@ class Tab(QWidget):
         if self._thumb_wanted:
             self._thumb_timer.start()
 
+    # ---- one-item context menu ----------------------------------------------------------------------------------
+    def _row_menu(self, view, pos) -> None:
+        idx = view.indexAt(pos)
+        if not idx.isValid():
+            return
+        m = self.item_menu(self.model.gid_at(idx.row()))
+        m.exec(view.viewport().mapToGlobal(pos))
+
+    def item_menu(self, gid: int) -> "QMenu":
+        """The context menu for one texture: exports just *gid*, without touching the check boxes.
+
+        Built separately from showing it so it can be tested without a modal exec().
+        """
+        name = self.cat.name(gid)
+        m = QMenu(self)
+        m.addAction("Export as DDS…", lambda: self._export_one("dds", gid))
+        m.addAction("Export as PNG…", lambda: self._export_one("png", gid))
+        m.addAction("Export raw parts…", lambda: self._export_one("raw", gid))
+        m.addSeparator()
+        m.addAction("Copy name", lambda: QGuiApplication.clipboard().setText(name))
+        checked = gid in self.model.checked
+        m.addAction("Uncheck" if checked else "Check", lambda: self.model.set_checked([gid], not checked))
+        return m
+
+    def _export_one(self, mode: str, gid: int) -> None:
+        self._export(mode, gids=[gid])
+
     # ---- export -------------------------------------------------------------------------------------------------
-    def _export(self, mode: str, out_dir: str | None = None) -> None:
-        gids = sorted(self.model.checked)
+    def _export(self, mode: str, out_dir: str | None = None, gids: list[int] | None = None) -> None:
+        """Export *gids*, or every checked texture when none are given (the Export Checked button)."""
+        gids = sorted(self.model.checked if gids is None else gids)
         if not gids:
             QMessageBox.information(self, TITLE, "Check at least one texture first.")
             return

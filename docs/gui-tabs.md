@@ -17,6 +17,10 @@ Common to all tabs:
 * **File › Open Extra Packs…**, or drag and drop, adds packs from outside the install.
 * **File › SDB** switches between `runtime_dx11.sdb` and `runtime_dx12.sdb` (the SDB tab has the same dropdown).
 * Double-clicking a texture, mesh, material or model anywhere opens it in its own tab.
+* **Right-clicking a row** in Raw, Textures, Meshes or Models exports just that one item, in every format the
+  tab's Export button offers, plus Copy name and Check / Uncheck. It acts on the row under the cursor — not on
+  the check boxes and not on the current selection — so grabbing one file takes two clicks instead of checking
+  it, exporting, and clearing the check.
 
 ## The update indicator
 

@@ -30,11 +30,11 @@ than guessing it.
   **Never install extra dependencies**: stdlib + numpy + Pillow (+ PySide6 for the GUI) only, and keep the code
   3.11-compatible.
 - Tests: `.venv\Scripts\python.exe tests\run.py -q` (set `QT_QPA_PLATFORM=offscreen` first).
-  432 tests collected, 2 expected failures, 0 failures on a correct tree. GUI tests skip without Qt; corpus tests
+  442 tests collected, 2 expected failures, 0 failures on a correct tree. GUI tests skip without Qt; corpus tests
   skip without a game install; sample-based tests skip unless `out\samples\` exists (build it with
   `tools\make_samples_mesh.py` / `make_samples_texture.py`); the DL2 decode fixtures under `tests\data\` are not
-  published, so those always skip. A clone with the game present reports `Ran 429 ... OK (skipped=135,
-  expected failures=2)` — 429 because three skip at class level, which unittest omits from its total.
+  published, so those always skip. A clone with the game present reports `Ran 439 ... OK (skipped=135,
+  expected failures=2)` — 439 because three skip at class level, which unittest omits from its total.
   **Run the suite before claiming a change works.**
 - Single module: `.venv\Scripts\python.exe -m unittest tests.test_project -q`.
 - CLI: `.venv\Scripts\python.exe nr.py <command>` — `info list validate census extract build roundtrip select`,

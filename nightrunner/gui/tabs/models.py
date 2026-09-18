@@ -18,7 +18,7 @@ import numpy as np
 from PySide6.QtCore import QObject, QRunnable, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget,
-                               QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSplitter,
+                               QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSplitter,
                                QTableView, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from ..modelresolve import json_safe, resolve_model
@@ -378,6 +378,8 @@ class Tab(QWidget):
         self.view.verticalHeader().setDefaultSectionSize(20)
         self.view.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.view.selectionModel().currentRowChanged.connect(self._on_row)
+        self.view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.view.customContextMenuRequested.connect(self._row_menu)
         self.list_model.checkedChanged.connect(self._update_count)
         ll.addWidget(self.view, 1)
         row = QHBoxLayout()
@@ -896,11 +898,43 @@ class Tab(QWidget):
             self._resolve()
 
     # ---- export -------------------------------------------------------------------------------------------------
-    def _ask_export(self, checked: bool) -> None:
-        if checked:
-            recs = [self.records[i] for i in sorted(self.list_model.checked)]
-        else:
-            recs = [self.current] if self.current is not None else []
+    def _row_menu(self, pos) -> None:
+        """Export just the model under the cursor, in either layout, without touching the check boxes.
+
+        The mesh variant only applies to the model currently open in the tab, so it is offered only for that one.
+        """
+        idx = self.view.indexAt(pos)
+        if not idx.isValid():
+            return
+        m = self.item_menu(self.list_model.gid_at(idx.row()))
+        m.exec(self.view.viewport().mapToGlobal(pos))
+
+    def item_menu(self, gid: int) -> "QMenu":
+        """The context menu for one model: exports just that record, without touching the check boxes."""
+        rec = self.records[gid]
+        m = QMenu(self)
+        for key, label in EXPORT_MODES:
+            m.addAction(f"Export {label}…", lambda k=key: self._export_one(rec, k))
+        m.addSeparator()
+        m.addAction("Copy name", lambda: QGuiApplication.clipboard().setText(rec["name"]))
+        checked = gid in self.list_model.checked
+        m.addAction("Uncheck" if checked else "Check", lambda: self.list_model.set_checked([gid], not checked))
+        return m
+
+    def _export_one(self, rec: dict, mode: str) -> None:
+        d = QFileDialog.getExistingDirectory(self, f"Export {rec['basename']} to", self.ctx.export_dir())
+        if not d:
+            return
+        self.ctx.set_export_dir(d)
+        self.start_export([rec], Path(d), mode=mode)
+
+    def _ask_export(self, checked: bool, recs: list[dict] | None = None) -> None:
+        """Export *recs*, else every checked model, else the selected one."""
+        if recs is None:
+            if checked:
+                recs = [self.records[i] for i in sorted(self.list_model.checked)]
+            else:
+                recs = [self.current] if self.current is not None else []
         if not recs:
             QMessageBox.information(self, TITLE, "Nothing to export: check or select a model first.")
             return

@@ -100,15 +100,15 @@ python tests\run.py -k texture -k select      # only ids containing a substring 
 python -m unittest tests.test_texture -v      # one module
 ```
 
-432 tests are collected, 2 of them expected failures. A correct tree never reports a failure.
+442 tests are collected, 2 of them expected failures. A correct tree never reports a failure.
 
 Much of the suite needs data that is not in the repository, and skips cleanly without it: tests that need a game
 install, GUI tests without PySide6, and tests that need the sample fixture tree. Build the samples with
 `tools\make_samples_mesh.py` and `tools\make_samples_texture.py`, which write into `out\samples\`. The DL2 decode
 fixtures under `tests\data\` are not published at all, so those tests always skip on a clone.
 
-On a fresh clone with a game installed, expect roughly `Ran 429 ... OK (skipped=135, expected failures=2)` —
-429 rather than 432 because three of them skip at class level, which unittest does not count in its total.
+On a fresh clone with a game installed, expect roughly `Ran 439 ... OK (skipped=135, expected failures=2)` —
+439 rather than 442 because three of them skip at class level, which unittest does not count in its total.
 
 Corpus-wide gates are run by hand and take minutes: `nr census`, `nr roundtrip`, `nr texture census`,
 `nr types census`, plus `tools\census_mesh.py`, `tools\mesh_bounds_census.py`, `tools\mesh_phase2_acceptance.py`

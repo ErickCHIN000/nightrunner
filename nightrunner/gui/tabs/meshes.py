@@ -13,7 +13,7 @@ from typing import Any
 
 import shiboken6
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QGuiApplication
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QSizePolicy,
                                QLabel, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSplitter,
                                QTableView, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
@@ -244,6 +244,8 @@ class Tab(QWidget):
         self.act_raw = menu.addAction("Raw parts…", lambda: self.export_checked("raw"))
         self.btn_export.setMenu(menu)
         self.btn_export.setEnabled(False)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._row_menu)
         self.export_prog = QProgressBar()
         self.export_prog.setFormat("%v / %m  %p%")
         self.btn_cancel = QPushButton("Cancel")
@@ -892,9 +894,31 @@ class Tab(QWidget):
             t.resizeColumnToContents(c)
 
     # ---- export -----------------------------------------------------------------------------------------------
-    def export_checked(self, kind: str, dest: str | None = None, overwrite: bool | None = None) -> bool:
-        """Export every checked mesh. *dest*/*overwrite* given → no dialogs (tests / scripting)."""
-        gids = sorted(self.model.checked)
+    def _row_menu(self, pos) -> None:
+        idx = self.table.indexAt(pos)
+        if not idx.isValid():
+            return
+        m = self.item_menu(self.model.gid_at(idx.row()))
+        m.exec(self.table.viewport().mapToGlobal(pos))
+
+    def item_menu(self, gid: int) -> "QMenu":
+        """The context menu for one mesh: exports just *gid*, without touching the check boxes."""
+        name = self.ctx.catalog.name(gid)
+        m = QMenu(self)
+        m.addAction("Export Cast + mesh.json…", lambda: self.export_checked("cast", gids=[gid]))
+        m.addAction("Export glTF binary (.glb)…", lambda: self.export_checked("glb", gids=[gid]))
+        m.addAction("Export glTF (.gltf + .bin)…", lambda: self.export_checked("gltf", gids=[gid]))
+        m.addAction("Export raw parts…", lambda: self.export_checked("raw", gids=[gid]))
+        m.addSeparator()
+        m.addAction("Copy name", lambda: QGuiApplication.clipboard().setText(name))
+        checked = gid in self.model.checked
+        m.addAction("Uncheck" if checked else "Check", lambda: self.model.set_checked([gid], not checked))
+        return m
+
+    def export_checked(self, kind: str, dest: str | None = None, overwrite: bool | None = None,
+                       gids: list[int] | None = None) -> bool:
+        """Export *gids*, or every checked mesh when none are given. *dest*/*overwrite* given → no dialogs."""
+        gids = sorted(self.model.checked if gids is None else gids)
         if not gids or self._export_cancel is not None:
             return False
         if dest is None:
