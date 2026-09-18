@@ -15,6 +15,7 @@ from ..games import PROFILES, GameInstall, detect_profile
 from .context import AppContext, detected_installs, remember_game
 from .tabs import TAB_MODULES
 from .theme import apply_theme
+from .updater import UpdateCorner
 
 
 class MainWindow(QMainWindow):
@@ -31,6 +32,9 @@ class MainWindow(QMainWindow):
         self.tabs.setDocumentMode(True)
         self.setCentralWidget(self.tabs)
         self.tab_objs: dict[str, object] = {}
+        from PySide6.QtCore import Qt as _Qt
+        self.updater = UpdateCorner(self.ctx, self)          # survives a game switch: tabs.clear() keeps corners
+        self.tabs.setCornerWidget(self.updater, _Qt.TopRightCorner)
 
         self.prog = QProgressBar()
         self.prog.setMaximumWidth(260)
@@ -52,6 +56,8 @@ class MainWindow(QMainWindow):
     def _attach(self, ctx: AppContext) -> None:
         """Wire *ctx* to the window and build the tabs on it."""
         self.ctx = ctx
+        if getattr(self, "updater", None) is not None:
+            self.updater.ctx = ctx                           # the retired context's runner is gone
         cat = ctx.catalog
         cat.progress.connect(self._on_progress)
         cat.ready.connect(self._on_ready)
