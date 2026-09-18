@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nightrunner.audio import aesp, bnk, pinhead, preview, resolve, wem  # noqa: E402
+from nightrunner.audio import aesp, bnk, build, pinhead, preview, resolve, wem  # noqa: E402
 from nightrunner.errors import BuildError, FormatError, UnsupportedError  # noqa: E402
 from tests.paths import have_game  # noqa: E402
 from tests.synth import tmpdir  # noqa: E402
@@ -822,3 +822,121 @@ class AudioTabApiTests(unittest.TestCase):
             used = {m.group(1) for m in re.finditer(rf"\b{name}\.(\w+)", src)}
             missing = sorted(n for n in used if not hasattr(mod, n))
             self.assertEqual(missing, [], f"audio.py calls {name}.{missing} which does not exist")
+
+
+# ---- writing containers -------------------------------------------------------------------------------------
+
+class BuildContainerTests(unittest.TestCase):
+    def test_round_trips_through_the_reader(self):
+        blob = build.build_container([build.Entry("747664", b"AAAA"), build.Entry("npc", b"BBB")], "sfx")
+        a = aesp.Aesp(memoryview(blob), "t.aesp")
+        self.assertEqual([(m.name, bytes(a.read(m))) for m in a], [("747664", b"AAAA"), ("npc", b"BBB")])
+        self.assertEqual(a.name, "sfx")
+
+    def test_ids_follow_the_rule_without_being_given(self):
+        blob = build.build_container([build.Entry("747664", b"x"), build.Entry("npc", b"y")], "sfx")
+        a = aesp.Aesp(memoryview(blob), "t.aesp")
+        self.assertTrue(all(m.id_matches_name for m in a))
+
+    def test_an_explicit_id_is_kept(self):
+        blob = build.build_container([build.Entry("npc", b"x", id=4242)], "meta")
+        self.assertEqual(aesp.Aesp(memoryview(blob), "t.aesp").members[0].id, 4242)
+
+    def test_payloads_are_contiguous_and_in_table_order(self):
+        blob = build.build_container([build.Entry("a", b"1" * 5), build.Entry("b", b"2" * 7)], "sfx")
+        a = aesp.Aesp(memoryview(blob), "t.aesp")
+        L = a.layout()
+        self.assertEqual((L["gaps"], L["trailing_bytes"]), (0, 0))
+        self.assertEqual(a.members[1].offset, a.members[0].offset + 5)
+
+    def test_the_header_is_carried_over_verbatim(self):
+        """The words this project does not understand (E1) must survive a rebuild untouched."""
+        head = bytearray(aesp.HEADER_MIN)
+        head[0x20:0x28] = b"\xde\xad\xbe\xef\x01\x02\x03\x04"
+        blob = build.build_container([build.Entry("a", b"x")], "sfx", header=bytes(head))
+        self.assertEqual(blob[0x20:0x28], b"\xde\xad\xbe\xef\x01\x02\x03\x04")
+
+    def test_a_short_header_is_refused(self):
+        with self.assertRaises(BuildError):
+            build.build_container([], "sfx", header=b"\0" * 8)
+
+    def test_an_overlong_name_is_refused(self):
+        with self.assertRaises(BuildError) as cm:
+            build.build_container([build.Entry("x" * 200, b"y")], "sfx")
+        self.assertIn("128", str(cm.exception))
+
+    def test_rebuild_of_a_written_container_is_byte_identical(self):
+        with tmproot("aesp_rebuild") as d:
+            p = Path(d) / "sfx.aesp"
+            p.write_bytes(build.build_container(
+                [build.Entry("747664", b"A" * 40), build.Entry("99", b"B" * 17)], "sfx"))
+            r = build.verify_rebuild(p)
+        self.assertTrue(r["identical"], r)
+        self.assertEqual(r["compared"], "every byte")
+
+    def test_the_cheap_check_agrees_with_the_full_one(self):
+        with tmproot("aesp_cheap") as d:
+            p = Path(d) / "sfx.aesp"
+            p.write_bytes(build.build_container([build.Entry("1", b"A" * 64), build.Entry("2", b"B" * 9)], "sfx"))
+            self.assertTrue(build.verify_rebuild(p, full=True)["identical"])
+            cheap = build.verify_rebuild(p, full=False)
+        self.assertTrue(cheap["identical"], cheap)
+        self.assertTrue(cheap["table_identical"] and cheap["payload_contiguous"] and cheap["ends_at_eof"])
+
+    def test_the_cheap_check_notices_a_gap(self):
+        with tmproot("aesp_gap") as d:
+            p = Path(d) / "sfx.aesp"
+            blob = bytearray(build.build_container([build.Entry("1", b"A" * 8), build.Entry("2", b"B" * 8)], "sfx"))
+            base = aesp.HEADER_MIN + aesp.ENTRY_SIZE + aesp.NAME_SIZE
+            struct.pack_into("<Q", blob, base + 8, struct.unpack_from("<Q", blob, base + 8)[0] + 4)
+            p.write_bytes(bytes(blob) + b"\0" * 4)
+            r = build.verify_rebuild(p, full=False)
+        self.assertFalse(r["identical"])
+        self.assertFalse(r["payload_contiguous"])
+
+
+class SwapTests(unittest.TestCase):
+    def test_plugin_patch_keeps_the_bank_the_same_size(self):
+        blob = make_bank([sound_object(1, 4242, bnk.STREAM_EMBEDDED, plugin=wem.PLUGIN_VORBIS),
+                          sound_object(2, 99, bnk.STREAM_EMBEDDED, plugin=wem.PLUGIN_VORBIS)])
+        out, n = build.patch_sound_plugin(blob, 4242)
+        self.assertEqual(n, 1)
+        self.assertEqual(len(out), len(blob))
+        by_src = {s.source_id: s for s in bnk.Bank(out, "b").sounds}
+        self.assertEqual(by_src[4242].plugin, wem.PLUGIN_PCM)
+        self.assertEqual(by_src[99].plugin, wem.PLUGIN_VORBIS)      # untouched
+        self.assertEqual(by_src[4242].stream_type, bnk.STREAM_EMBEDDED)
+
+    def test_plugin_patch_reports_when_it_matched_nothing(self):
+        blob = make_bank([sound_object(1, 4242, 0)])
+        _, n = build.patch_sound_plugin(blob, 12345)
+        self.assertEqual(n, 0)
+
+    def test_copy_hash_chunk_inserts_after_fmt(self):
+        old = (b"RIFF" + struct.pack("<I", 0) + b"WAVE"
+               + b"fmt " + struct.pack("<I", 4) + b"\1\2\3\4"
+               + b"hash" + struct.pack("<I", 4) + b"HASH"
+               + b"data" + struct.pack("<I", 2) + b"\0\0")
+        new = wem.build_pcm_wem(wem.WavPcm(1, 44100, b"\0\0" * 10))
+        got = build.copy_hash_chunk(new, old)
+        tags = [t for t, _, _, _ in build._chunks(got)]
+        self.assertEqual(tags[:2], [b"fmt ", b"hash"])
+        self.assertIn(b"HASH", got)
+        self.assertEqual(struct.unpack_from("<I", got, 4)[0], len(got) - 8)     # RIFF size stays right
+
+    def test_copy_hash_is_a_no_op_without_one(self):
+        new = wem.build_pcm_wem(wem.WavPcm(1, 44100, b"\0\0" * 10))
+        self.assertIs(build.copy_hash_chunk(new, b"RIFF...."), new)
+
+    def test_back_up_never_overwrites(self):
+        with tmproot("aesp_backup") as d:
+            src, dst = d / "audio", d / "backup"
+            src.mkdir()
+            (src / "sfx.aesp").write_bytes(b"original")
+            first = build.back_up(src, ["sfx.aesp", "nope.aesp"], dst)
+            self.assertEqual(first["sfx.aesp"]["bytes"], 8)
+            self.assertNotIn("nope.aesp", first)
+            (src / "sfx.aesp").write_bytes(b"changed!!")
+            second = build.back_up(src, ["sfx.aesp"], dst)
+            self.assertIn("skipped", second["sfx.aesp"])
+            self.assertEqual((dst / "sfx.aesp").read_bytes(), b"original")
