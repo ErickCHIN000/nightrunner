@@ -10,6 +10,23 @@ On start it opens the last used install, or the first one it detects. It then in
 `runtime_dx11.sdb` and every `<data>\source\dataN.pak`. Every list is virtual and every search, decode and export
 runs off the GUI thread, so nothing is capped — scroll or search to any of the ~150,000 resources.
 
+## Sections
+
+Tabs are grouped. The outer bar picks a section; the tabs of that section sit below it.
+
+| section | tabs |
+|---|---|
+| **RPACK** | Raw, Textures, Meshes, Models, Build |
+| **SDB** | SDB |
+
+A section holding a single tab shows that tab directly, with no second bar to switch between one thing. Opening
+something from another tab crosses sections on its own: double-clicking a material anywhere lands on SDB, and
+double-clicking a mesh from there comes back to Meshes. The window reopens on whichever tab you left it on, by
+name.
+
+More sections are planned - audio (Wwise), GUI modding and data PAK work, plus writing for SDB. See
+[roadmap.md](roadmap.md).
+
 Common to all tabs:
 
 * **Game** menu — one entry per detected install, plus **Browse…** for any root. Switching rebuilds every tab in

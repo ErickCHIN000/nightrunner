@@ -13,7 +13,7 @@ from .. import __version__
 from . import APP_NAME
 from ..games import PROFILES, GameInstall, detect_profile
 from .context import AppContext, detected_installs, remember_game
-from .tabs import TAB_MODULES
+from .tabs import SECTIONS
 from .theme import apply_theme
 from .updater import UpdateCorner
 
@@ -48,7 +48,8 @@ class MainWindow(QMainWindow):
         g = self.settings.value("window/geometry")
         if g is not None:
             self.restoreGeometry(g)
-        self.tabs.setCurrentIndex(int(self.settings.value("window/tab", 0)))
+        if not self.show_tab(str(self.settings.value("window/tab", "") or "")):
+            self.tabs.setCurrentIndex(0)
         if self.ctx.game is not None and ctx is None:
             remember_game(self.settings, self.ctx.game)
 
@@ -69,10 +70,23 @@ class MainWindow(QMainWindow):
         ctx.openModel.connect(lambda n: self._goto("models", "open_model", n))
         ctx.openModelDoc.connect(lambda n, d, p: self._goto("models", "open_model_doc", n, d, p))
         ctx.sdbChanged.connect(self._on_sdb_changed)
-        for name in TAB_MODULES:
-            w = self._make_tab(name)
-            self.tab_objs[name] = w
-            self.tabs.addTab(w, getattr(w, "TITLE", name.capitalize()))
+        self.section_tabs = {}
+        for title, names in SECTIONS:
+            widgets = []
+            for name in names:
+                w = self._make_tab(name)
+                self.tab_objs[name] = w
+                widgets.append((name, w))
+            if len(widgets) == 1:
+                # a single-tab section shows its tab directly: an inner bar with one tab switches nothing
+                page = widgets[0][1]
+            else:
+                page = QTabWidget()
+                page.setDocumentMode(True)
+                for name, w in widgets:
+                    page.addTab(w, getattr(w, "TITLE", name.capitalize()))
+                self.section_tabs[title] = page
+            self.tabs.addTab(page, title)
         self._update_game_label()
         self.prog.setVisible(bool(cat.packs) and not cat.is_ready)
         if ctx.game is None:
@@ -84,6 +98,11 @@ class MainWindow(QMainWindow):
         """Shut the tabs down and retire the current context (closed, signals cut)."""
         self._shutdown_tabs()
         self.tabs.clear()
+        for page in getattr(self, "section_tabs", {}).values():
+            page.clear()
+            page.setParent(None)
+            page.deleteLater()
+        self.section_tabs = {}
         for w in self.tab_objs.values():
             w.setParent(None)
             w.deleteLater()
@@ -117,10 +136,11 @@ class MainWindow(QMainWindow):
         remember_game(self.settings, game)
         if self._installs is not None:
             self._installs[game.id] = game
-        tab = self.tabs.currentIndex()
+        tab = self.current_tab_name()
         self._detach()
         self._attach(AppContext(self.settings, game, autoload=True))
-        self.tabs.setCurrentIndex(max(0, tab))
+        if not (tab and self.show_tab(tab)):
+            self.tabs.setCurrentIndex(0)
         self._sync_game_menu()
         return True
 
@@ -147,12 +167,36 @@ class MainWindow(QMainWindow):
             w.TITLE = f"{name.capitalize()} (error)"
             return w
 
+    def current_tab_name(self) -> str | None:
+        """The tab module name showing now, looking inside the current section."""
+        page = self.tabs.currentWidget()
+        inner = page.currentWidget() if isinstance(page, QTabWidget) else page
+        for name, w in self.tab_objs.items():
+            if w is inner:
+                return name
+        return None
+
+    def show_tab(self, name: str) -> bool:
+        """Bring the tab *name* to the front, section and all. False when there is no such tab."""
+        w = self.tab_objs.get(name)
+        if w is None:
+            return False
+        for title, names in SECTIONS:
+            if name not in names:
+                continue
+            page = self.section_tabs.get(title, w)
+            self.tabs.setCurrentWidget(page)
+            if page is not w:
+                page.setCurrentWidget(w)
+            return True
+        return False
+
     def _goto(self, name: str, slot: str, *args) -> None:
         w = self.tab_objs.get(name)
         fn = getattr(w, slot, None)
         if fn is None:
             return
-        self.tabs.setCurrentWidget(w)
+        self.show_tab(name)
         fn(*args)
 
     # ---- status -----------------------------------------------------------------------------------------------
@@ -293,7 +337,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         self.settings.setValue("window/geometry", self.saveGeometry())
-        self.settings.setValue("window/tab", self.tabs.currentIndex())
+        self.settings.setValue("window/tab", self.current_tab_name() or "")
         self._shutdown_tabs()
         self.ctx.runner.pool.waitForDone(2000)
         self.ctx.close()

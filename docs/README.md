@@ -7,6 +7,8 @@
 | [gui-tabs.md](gui-tabs.md) | the GUI tab by tab: Raw, Textures, Meshes, Models, Build, SDB |
 | [workflow.md](workflow.md) | the two routes to an installable mod, end to end, plus the traps |
 | [cli-reference.md](cli-reference.md) | every command and sub-command, with examples |
+| [roadmap.md](roadmap.md) | the tab sections that are planned but not built: SDB writing, audio (Wwise), GUI modding, data PAK |
+| [contributing.md](contributing.md) | running the tests, committing, pushing, and the habits that GUI work needs |
 
 New here? Read [getting-started.md](getting-started.md), then [workflow.md](workflow.md).
 

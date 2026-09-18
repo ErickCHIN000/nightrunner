@@ -96,7 +96,9 @@ class GamePickerTests(unittest.TestCase):
             self.assertEqual(win.settings.value("game/current"), "dl2")
             self.assertEqual(win.settings.value("game/root/dl2"), str(self.t))
             self.assertTrue(acts["dl2"].isChecked() and not acts["dltb"].isChecked())
-            self.assertEqual(win.tabs.count(), len(old_tabs))
+            from nightrunner.gui.tabs import SECTIONS
+            self.assertEqual(win.tabs.count(), len(SECTIONS))          # outer bar: one page per section
+            self.assertEqual(len(win.tab_objs), len(old_tabs))         # every tab rebuilt on the new context
             self.assertTrue(all(win.tab_objs[k] is not old_tabs[k] for k in old_tabs))
             self.assertEqual(win.ctx.sdb.path, self.t / "ph/work/data_platform/pc/assets/runtime_dx11.sdb")
             self.assertEqual([p.name for p in win.ctx.paks.paths], ["data0.pak", "data1.pak"])
