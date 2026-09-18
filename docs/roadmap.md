@@ -96,13 +96,14 @@ blocked. Bank parsing is also in reach: all 123 banks walk cleanly to their exac
    whitelist is the tool's own invention, which matches its author describing the patching side as something he
    made up rather than ported. Whether the engine reads those elements at all, or whether the work is really done
    by the stream-type flip and the extra mod container, is untested.
-4. **Encoding a `.wem` may not need Audiokinetic's tooling after all.** The game ships two PCM wems (source
+4. **Encoding a `.wem` does not need Audiokinetic's tooling — confirmed in game 2026-09-18.** The game ships two PCM wems (source
    plugin `0x00010001`, `fx` bank), so the engine's Wwise runtime carries the PCM codec, and PCM is writable with
    `struct`. `nightrunner/audio/wem.py` builds that shape: its `fmt` chunk is byte-identical to the shipped one,
    and vgmstream reads what it writes bit-exactly. Two unknowns remain before this is an import path — the
-   16-byte content-derived `hash` chunk that nothing here can compute (E12), and that swapping a sound to PCM
-   also means patching its plugin id in the bank (E13). Neither is confirmed in game. The original note below
-   still stands for Vorbis specifically.
+   16-byte content-derived `hash` chunk (E12) and the plugin-id patch (E13). Both are now settled: replacing 18
+   sources with PCM wems and patching the 39 Sound objects that reference them changed the audio in game, with
+   the original's stale hash carried over. The note below still stands for Vorbis specifically, but Vorbis is no
+   longer required to get audio in.
 
 5. **Encoding Wwise Vorbis needs Audiokinetic's own tooling.** This was worth checking properly, because it changes
    what the dependency question even is. UTM-AIO does not encode audio with ffmpeg: its build notes say ffmpeg is

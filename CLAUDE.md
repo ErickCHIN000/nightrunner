@@ -92,6 +92,10 @@ PAKs (`.model` definitions, scripts): `<root>\<data>\source\dataN.pak`.
   `number` is only an id linking to `materialsResources`. Unknown `rttiValues` params are harmless.
 - Older finding, now doubtful: "new meshes in HEAD/LEGS slots are not drawn" was probably the one-entry bug.
   Re-test before trusting the warning the builder still emits.
+- **Audio can be replaced without Wwise** (2026-09-18). A `sfx.aesp` rebuilt by `audio/build.py` loads, and a PCM
+  `.wem` built by `audio/wem.py` plays, when the referencing Sound objects' plugin id is patched
+  `0x00040001` -> `0x00010001` in every bank that uses the source. The replacement carried the original's stale
+  `hash` chunk and the engine accepted it. Not shown: adding a *new* member id, or any `mods/audio/` mount.
 
 ## Where things are
 
