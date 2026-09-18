@@ -91,11 +91,17 @@ blocked. Bank parsing is also in reach: all 123 banks walk cleanly to their exac
 2. `.bnk` beyond the chunk and object walk: the rest of a Sound body, the other 18 object types, `DIDX`/`DATA`
    pairing. Needed for anything past stream-type patching.
 3. `PinheadPatcher` rewrites a `<File id="...">` whitelist inside each `<Preload>`. DLTB's shipped registry has
-   **no `<File>` elements at all** — 0 of 128 preloads. Either a Dying Light 2 shape, or something the tool adds
-   and the engine tolerates.
-4. Converting user audio into a `.wem` needs a Wwise-format encoder. UTM-AIO ships ffmpeg for it. This project
-   allows stdlib, numpy and Pillow only, so that is a deliberate dependency decision — the same call already made
-   for BC textures, where the answer was to refuse and point at an external tool.
+   **no `<File>` elements at all** — 0 of 128 preloads, measured. Reading the caller settles what it is: it runs in
+   "update mode" (same bank name in and out), removes any `<File>` children and adds one per new wem id. So the
+   whitelist is the tool's own invention, which matches its author describing the patching side as something he
+   made up rather than ported. Whether the engine reads those elements at all, or whether the work is really done
+   by the stream-type flip and the extra mod container, is untested.
+4. **Encoding a `.wem` needs Audiokinetic's own tooling.** This was worth checking properly, because it changes
+   what the dependency question even is. UTM-AIO does not encode audio with ffmpeg: its build notes say ffmpeg is
+   there "only to normalise WAV files" — resample to 44.1 kHz, mix to stereo, write `pcm_s16le`. The actual
+   conversion is `WwiseConsole.exe convert-external-source` against a template `.wproj`, i.e. the Wwise authoring
+   application. So the missing piece is not a library anyone can vendor; it is a licensed third-party toolchain
+   the user must install. Reading audio out needs vgmstream; writing audio in needs Wwise.
 5. `<data>/work/data_lang/speech_en/` has not been looked at.
 
 **A reasonable first slice** is read-only and needs none of the above settled: an AESP reader, the registry
