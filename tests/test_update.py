@@ -281,5 +281,43 @@ class ApplyGuardTests(unittest.TestCase):
             self.assertIn("2 uncommitted", why)
 
 
+class ApplyFailureTests(unittest.TestCase):
+    """What the caller sees when git itself refuses. Real-git behaviour verified by hand on 2026-09-17:
+    a diverged branch passes can_apply and is stopped by --ff-only, leaving the local commits in place."""
+
+    def run_with(self, results):
+        calls = []
+
+        def fake(root, *a, **k):
+            calls.append(a[0])
+            r = results.get(a[0], (0, "", ""))
+            return type("R", (), {"returncode": r[0], "stdout": r[1], "stderr": r[2]})()
+
+        real = up._git
+        up._git = fake
+        try:
+            with tmproot("upd_apply") as d:
+                git_tree(d, "ref: refs/heads/main\n", {"main": LOCAL})
+                with self.assertRaises(up.UpdateError) as cm:
+                    up.apply_update(d)
+            return str(cm.exception), calls
+        finally:
+            up._git = real
+
+    def test_diverged_branch_is_refused_by_ff_only(self):
+        msg, calls = self.run_with({"merge": (128, "", "fatal: Not possible to fast-forward, aborting.\n")})
+        self.assertEqual(msg, "Not possible to fast-forward, aborting.")   # no "fatal:" in a dialog
+        self.assertIn("merge", calls)
+
+    def test_fetch_failure_stops_before_the_merge(self):
+        msg, calls = self.run_with({"fetch": (128, "", "fatal: could not read Username\n")})
+        self.assertEqual(msg, "Could not read Username")
+        self.assertNotIn("merge", calls)                                   # nothing was touched
+
+    def test_silent_git_failure_still_reports_something(self):
+        msg, _ = self.run_with({"merge": (1, "", "")})
+        self.assertEqual(msg, "git merge failed")
+
+
 if __name__ == "__main__":
     unittest.main()

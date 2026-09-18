@@ -358,13 +358,25 @@ def apply_update(root: Path | None = None, branch: str | None = None) -> str:
     try:
         r = _git(root, "fetch", "origin", branch, timeout=300)
         if r.returncode != 0:
-            raise UpdateError((r.stderr or "git fetch failed").strip().splitlines()[-1])
+            raise UpdateError(_git_message(r.stderr, "git fetch failed"))
+        # --ff-only is the whole safety story: a diverged branch passes can_apply (clean tree, on a branch) and is
+        # stopped here instead, leaving the local commits untouched. Verified against real git 2026-09-17.
         r = _git(root, "merge", "--ff-only", "FETCH_HEAD", timeout=120)
         if r.returncode != 0:
-            raise UpdateError((r.stderr or "git merge failed").strip().splitlines()[-1])
+            raise UpdateError(_git_message(r.stderr, "git merge failed"))
     except subprocess.SubprocessError as exc:
         raise UpdateError(f"git failed: {type(exc).__name__}") from exc
     return local_commit(root) or ""
+
+
+def _git_message(stderr: str | None, fallback: str) -> str:
+    """The last meaningful line of git's stderr, without the "fatal:" noise a dialog should not show."""
+    line = (stderr or "").strip().splitlines()
+    msg = line[-1].strip() if line else ""
+    for prefix in ("fatal: ", "error: "):
+        if msg.lower().startswith(prefix):
+            msg = msg[len(prefix):]
+    return (msg[:1].upper() + msg[1:]) if msg else fallback
 
 
 def _describe(exc: Exception) -> str:
