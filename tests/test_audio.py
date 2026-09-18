@@ -629,8 +629,9 @@ class PyVgmstreamBackendTests(unittest.TestCase):
     """The optional in-process backend. Never installed by this project, so these tests stub the module."""
 
     def install_stub(self, convert):
+        """*convert* stands in for pyvgmstream 0.1.1's decode_buffer_to_wav_bytes(data, filename_hint=...)."""
         mod = types.ModuleType(preview.PY_MODULE)
-        mod.convert = convert
+        mod.decode_buffer_to_wav_bytes = convert
         sys.modules[preview.PY_MODULE] = mod
         self.addCleanup(lambda: sys.modules.pop(preview.PY_MODULE, None))
         real = preview.importlib.util.find_spec
@@ -642,30 +643,39 @@ class PyVgmstreamBackendTests(unittest.TestCase):
         """It is not a dependency: a clean checkout must not find it."""
         self.assertNotIn(preview.PY_MODULE, {d.lower() for d in ("numpy", "pillow", "pyside6")})
 
+    def test_calls_the_real_0_1_1_entry_point(self):
+        """The first cut called a convert() that does not exist in the published package."""
+        self.install_stub(lambda data, filename_hint=None: b"RIFFok")
+        mod = sys.modules[preview.PY_MODULE]
+        self.assertTrue(hasattr(mod, "decode_buffer_to_wav_bytes"))
+        self.assertFalse(hasattr(mod, "convert"))
+        self.assertEqual(preview.decode_in_process(riff()), b"RIFFok")
+
     def test_decodes_in_memory_when_present(self):
         seen = []
-        self.install_stub(lambda data, ext: seen.append((data[:4], ext)) or b"RIFFwav-from-module")
+        self.install_stub(lambda data, filename_hint=None: seen.append((data[:4], filename_hint))
+                          or b"RIFFwav-from-module")
         self.assertTrue(preview.have_pyvgmstream())
         self.assertTrue(preview.available())
         self.assertEqual(preview.backend(), preview.PY_MODULE)
         self.assertEqual(preview.decode_in_process(riff()), b"RIFFwav-from-module")
-        self.assertEqual(seen, [(b"RIFF", "wem")])
+        self.assertEqual(seen, [(b"RIFF", "sound.wem")])
 
     def test_preferred_over_the_executable(self):
-        self.install_stub(lambda data, ext: b"RIFFfrom-module")
+        self.install_stub(lambda data, filename_hint=None: b"RIFFfrom-module")
         with tmproot("wem_pref") as d:
             out = preview.decode_to_wav(riff(), d / "out.wav")
             self.assertEqual(out.read_bytes(), b"RIFFfrom-module")
 
     def test_an_explicit_decoder_still_wins(self):
         """Passing a decoder explicitly must not be silently overridden by the module."""
-        self.install_stub(lambda data, ext: b"RIFFfrom-module")
+        self.install_stub(lambda data, filename_hint=None: b"RIFFfrom-module")
         with tmproot("wem_explicit") as d:
             out = preview.decode_to_wav(riff(), d / "out.wav", decoder=stub_decoder(d))
             self.assertTrue(out.read_bytes().startswith(b"RIFFdecoded"))
 
     def test_a_raising_backend_becomes_an_unsupported_error(self):
-        def boom(data, ext):
+        def boom(data, filename_hint=None):
             raise ValueError("bad stream")
         self.install_stub(boom)
         with self.assertRaises(UnsupportedError) as cm:

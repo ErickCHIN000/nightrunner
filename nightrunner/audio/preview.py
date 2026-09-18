@@ -14,9 +14,11 @@ was to point at `texconv` rather than ship an encoder.
 Two backends, tried in that order:
 
 1. **pyvgmstream**, if the user has installed it — a binding that decodes bytes to wav bytes in memory, no
-   temporary files and no executable. It is *not* a dependency of this project and is never installed here: it
-   ships as a compiled wheel, declares no licence on GitHub or PyPI, and its PyPI metadata carries no link back
-   to the repository, so whether to trust it is the user's decision to make deliberately.
+   temporary files and no executable. It is BSD-3-Clause (PyPI `license_expression`, which is where PEP 639 puts
+   it now — the older `license` field and the classifiers are both empty, so a check that reads only those
+   wrongly concludes it is unlicensed), and it ships licence files for vgmstream and pybind11 alongside its own.
+   It is still *not* a dependency of this project and is never installed here: adding one is a deliberate
+   decision, not something to slip in behind a convenience.
 2. **vgmstream-cli**, found via `$NIGHTRUNNER_VGMSTREAM`, then beside this install, then `PATH`.
 
 Nothing is ever downloaded.
@@ -125,7 +127,9 @@ def decode_in_process(wem: bytes) -> bytes:
         raise UnsupportedError(INSTALL_HINT)
     try:
         mod = importlib.import_module(PY_MODULE)
-        return bytes(mod.convert(wem, "wem"))
+        # pyvgmstream 0.1.1: decode_buffer_to_wav_bytes(data, filename_hint=...). The hint is how it picks the
+        # format, and these members carry no extension of their own.
+        return bytes(mod.decode_buffer_to_wav_bytes(wem, filename_hint="sound.wem"))
     except UnsupportedError:
         raise
     except Exception as exc:                       # a third-party backend must not take the tab down

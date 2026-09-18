@@ -240,9 +240,10 @@ same call already made for BC textures.
 There are two ways to give it a decoder, tried in this order:
 
 1. **`pip install pyvgmstream`** — a binding that decodes in memory, no executable and no temporary files. It is
-   optional and is never installed for you. Be aware before you choose it: it is a compiled wheel that declares
-   no licence on GitHub or PyPI, and its PyPI metadata carries no link back to its repository, so its provenance
-   is not something this project can vouch for.
+   BSD-3-Clause, ships prebuilt wheels for CPython 3.10–3.14 on Windows, Linux and macOS, and includes the
+   licence files for vgmstream and pybind11 alongside its own. It is optional and is never installed for you:
+   this project's dependencies are stdlib, numpy, Pillow and PySide6, and adding to that list is a deliberate
+   decision rather than a convenience.
 2. **vgmstream-cli** — point at it with `NIGHTRUNNER_VGMSTREAM`, put it on `PATH`, or drop it in a `vgmstream`
    folder beside the repository.
 
