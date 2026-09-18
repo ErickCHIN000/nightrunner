@@ -40,7 +40,8 @@ new materials — only `rttiValues` overrides of existing ones), and a DL2 mesh 
 
 ## Requirements
 
-Windows, Python ≥ 3.11, `numpy` and `Pillow`, plus `PySide6 >= 6.7` for the GUI. Nothing else.
+Windows, Python ≥ 3.11, `numpy` and `Pillow`, plus `PySide6 >= 6.7` for the GUI and `pyvgmstream` for audio
+preview. That is the whole list.
 
 ```bat
 setup.bat            :: creates .venv and installs requirements-gui.txt

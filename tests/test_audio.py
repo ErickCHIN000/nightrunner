@@ -559,6 +559,7 @@ class DecoderTests(unittest.TestCase):
     """The decoder is external, so these drive a stub executable rather than needing vgmstream installed."""
 
     def test_decodes_through_the_external_tool(self):
+        """An explicit decoder must win over the in-process backend, which is installed here."""
         with tmproot("wem_decode") as d:
             out = preview.decode_to_wav(riff(), d / "out.wav", decoder=stub_decoder(d))
             self.assertTrue(out.is_file())
@@ -577,9 +578,12 @@ class DecoderTests(unittest.TestCase):
         self.assertIn("could not run", str(cm.exception).casefold())
 
     def test_no_decoder_at_all_refuses_with_the_hint(self):
+        """Both backends absent. pyvgmstream is a real dependency now, so it has to be hidden explicitly."""
         old = os.environ.pop(preview.ENV_VAR, None)
         real_which = preview.shutil.which
+        real_spec = preview.importlib.util.find_spec
         preview.shutil.which = lambda name: None
+        preview.importlib.util.find_spec = lambda name: None if name == preview.PY_MODULE else real_spec(name)
         try:
             self.assertIsNone(preview.find_decoder())
             with tmproot("wem_none") as d:
@@ -589,6 +593,7 @@ class DecoderTests(unittest.TestCase):
             self.assertIn(preview.ENV_VAR, str(cm.exception))
         finally:
             preview.shutil.which = real_which
+            preview.importlib.util.find_spec = real_spec
             if old is not None:
                 os.environ[preview.ENV_VAR] = old
 
@@ -687,3 +692,55 @@ class PyVgmstreamBackendTests(unittest.TestCase):
         self.assertIn(preview.PY_MODULE, preview.INSTALL_HINT)
         self.assertIn("vgmstream-cli", preview.INSTALL_HINT)
         self.assertIn(preview.ENV_VAR, preview.INSTALL_HINT)
+
+
+class Pcm16ConversionTests(unittest.TestCase):
+    """pyvgmstream returns IEEE float32; several playback backends only take 16-bit PCM."""
+
+    def wav(self, tag: int, bits: int, body: bytes, channels: int = 2, rate: int = 44100) -> bytes:
+        fmt = struct.pack("<HHIIHH", tag, channels, rate, rate * channels * bits // 8, channels * bits // 8, bits)
+        rest = (b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+                + b"data" + struct.pack("<I", len(body)) + body)
+        return b"RIFF" + struct.pack("<I", len(rest)) + rest
+
+    def parse(self, wav: bytes):
+        tag, ch, rate, _bps, _align, bits = struct.unpack_from("<HHIIHH", wav, 20)
+        size = struct.unpack_from("<I", wav, 40)[0]
+        return tag, bits, ch, rate, size
+
+    def test_float32_becomes_pcm16_and_keeps_its_length(self):
+        import numpy as np
+        frames = 1000
+        body = np.tile(np.array([0.0, 0.5], dtype="<f4"), frames).tobytes()
+        out = preview.to_pcm16_wav(self.wav(preview.WAVE_FLOAT, 32, body))
+        tag, bits, ch, rate, size = self.parse(out)
+        self.assertEqual((tag, bits, ch, rate), (preview.WAVE_PCM, 16, 2, 44100))
+        self.assertEqual(size, frames * 2 * 2)                      # same frame count, half the width
+
+    def test_values_are_scaled_not_truncated(self):
+        import numpy as np
+        body = np.array([0.0, 1.0, -1.0, 0.5], dtype="<f4").tobytes()
+        out = preview.to_pcm16_wav(self.wav(preview.WAVE_FLOAT, 32, body))
+        got = np.frombuffer(out[44:], dtype="<i2")
+        self.assertEqual(list(got[:3]), [0, 32767, -32767])
+        self.assertAlmostEqual(int(got[3]), 16383, delta=2)
+
+    def test_out_of_range_floats_are_clipped(self):
+        import numpy as np
+        body = np.array([2.5, -2.5], dtype="<f4").tobytes()
+        got = np.frombuffer(preview.to_pcm16_wav(self.wav(preview.WAVE_FLOAT, 32, body))[44:], dtype="<i2")
+        self.assertEqual(list(got), [32767, -32767])
+
+    def test_already_pcm16_is_returned_untouched(self):
+        w = self.wav(preview.WAVE_PCM, 16, b"\x01\x02" * 100)
+        self.assertIs(preview.to_pcm16_wav(w), w)
+
+    def test_an_unfamiliar_shape_is_left_alone(self):
+        """24-bit, or anything else unrecognised, must not be mangled into silence."""
+        w = self.wav(preview.WAVE_PCM, 24, b"\x01\x02\x03" * 30)
+        self.assertIs(preview.to_pcm16_wav(w), w)
+        self.assertIs(preview.to_pcm16_wav(b"not a wav"), preview.to_pcm16_wav(b"not a wav"))
+
+    def test_junk_is_not_crashed_on(self):
+        for junk in (b"", b"RIFF", b"RIFF\0\0\0\0WAVE", b"RIFF" + b"\0" * 60):
+            self.assertIsInstance(preview.to_pcm16_wav(junk), bytes)

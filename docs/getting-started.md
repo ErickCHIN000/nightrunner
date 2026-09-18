@@ -4,8 +4,10 @@
 
 * Windows.
 * Python 3.11 or newer (developed on 3.14; the source stays 3.11-compatible).
-* `numpy` and `Pillow`. `PySide6 >= 6.7` as well if you want the GUI. Nothing else — no other dependency is
-  permitted in this project.
+* `numpy` and `Pillow`. `PySide6 >= 6.7` as well if you want the GUI, and `pyvgmstream` (BSD-3-Clause) if you
+  want the Audio tab's Play button — it decodes Wwise Vorbis, which nothing standard reads. That is the whole
+  list; dependencies are added deliberately, not casually. `pyvgmstream` is optional at runtime: without it the
+  Audio tab still browses and exports, and Play falls back to a `vgmstream-cli` on `PATH`.
 * One of the supported games installed. Every command takes explicit paths, and nothing is ever written into a
   game folder.
 

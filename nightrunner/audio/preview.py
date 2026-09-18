@@ -35,6 +35,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from ..errors import UnsupportedError
 
 #: Executable names vgmstream ships under, newest first. `test.exe` is its old name and is deliberately **not**
@@ -50,6 +52,10 @@ ENV_VAR = "NIGHTRUNNER_VGMSTREAM"
 
 #: WAVE format tag of every wem in these games. 0xFFFF is "extensible/other"; here it means Wwise Vorbis.
 WWISE_VORBIS = 0xFFFF
+
+#: WAVE format tags of the decoder's *output*.
+WAVE_PCM = 1
+WAVE_FLOAT = 3
 
 #: The optional in-process backend. Not a dependency: `pip install pyvgmstream` is the user's own call.
 PY_MODULE = "pyvgmstream"
@@ -94,6 +100,41 @@ def read_info(data: bytes) -> WemInfo | None:
     return WemInfo(fmt[0], fmt[1], fmt[2], data_bytes)
 
 
+def to_pcm16_wav(wav: bytes) -> bytes:
+    """A wav re-encoded as 16-bit integer PCM, if it is not already.
+
+    pyvgmstream hands back IEEE float32 (`fmt` tag 3, 32-bit), which several playback backends accept and others
+    silently refuse - the failure looks like "Play does nothing", which is the worst kind. Anything already
+    16-bit PCM, or in a shape this does not recognise, is returned untouched rather than mangled.
+    """
+    if len(wav) < 44 or wav[:4] != b"RIFF" or wav[8:12] != b"WAVE":
+        return wav
+    fmt = data = None
+    pos = 12
+    while pos + 8 <= len(wav):
+        tag = wav[pos:pos + 4]
+        size = struct.unpack_from("<I", wav, pos + 4)[0]
+        if tag == b"fmt " and fmt is None:
+            fmt = struct.unpack_from("<HHIIHH", wav, pos + 8)
+        elif tag == b"data" and data is None:
+            data = (pos + 8, size)
+        pos += 8 + size + (size & 1)
+    if fmt is None or data is None:
+        return wav
+    tag_, channels, rate, _bps, _align, bits = fmt
+    if tag_ == WAVE_PCM and bits == 16:
+        return wav
+    if tag_ != WAVE_FLOAT or bits != 32:
+        return wav                                   # an unfamiliar shape is left alone, not guessed at
+    off, size = data
+    samples = np.frombuffer(wav[off:off + size], dtype="<f4")
+    pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2")
+    body = pcm.tobytes()
+    hdr = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + len(body), b"WAVE", b"fmt ", 16, WAVE_PCM, channels,
+                      rate, rate * channels * 2, channels * 2, 16, b"data", len(body))
+    return hdr + body
+
+
 def find_decoder() -> Path | None:
     """vgmstream, or None. Env first, then beside this install, then PATH."""
     env = os.environ.get(ENV_VAR)
@@ -129,7 +170,7 @@ def decode_in_process(wem: bytes) -> bytes:
         mod = importlib.import_module(PY_MODULE)
         # pyvgmstream 0.1.1: decode_buffer_to_wav_bytes(data, filename_hint=...). The hint is how it picks the
         # format, and these members carry no extension of their own.
-        return bytes(mod.decode_buffer_to_wav_bytes(wem, filename_hint="sound.wem"))
+        return to_pcm16_wav(bytes(mod.decode_buffer_to_wav_bytes(wem, filename_hint="sound.wem")))
     except UnsupportedError:
         raise
     except Exception as exc:                       # a third-party backend must not take the tab down

@@ -26,9 +26,12 @@ than guessing it.
 
 ## Environment
 
-- Windows. Interpreter: `.venv\Scripts\python.exe` (created by `setup.bat`; numpy, Pillow, PySide6).
-  **Never install extra dependencies**: stdlib + numpy + Pillow (+ PySide6 for the GUI) only, and keep the code
-  3.11-compatible.
+- Windows. Interpreter: `.venv\Scripts\python.exe` (created by `setup.bat`; numpy, Pillow, PySide6,
+  pyvgmstream). **Never add a dependency without asking**: stdlib + numpy + Pillow, PySide6 for the GUI, and
+  pyvgmstream for audio preview. Keep the code 3.11-compatible.
+  `pyvgmstream` (BSD-3-Clause) decodes Wwise Vorbis `.wem`, which nothing standard reads and which this project
+  will not implement itself. It is **optional at runtime**: the audio area must keep working without it, falling
+  back to a `vgmstream-cli` executable and refusing clearly when neither is there.
 - Tests: `.venv\Scripts\python.exe tests\run.py -q` (set `QT_QPA_PLATFORM=offscreen` first).
   489 tests collected, 2 expected failures, 0 failures on a correct tree. GUI tests skip without Qt; corpus tests
   skip without a game install; sample-based tests skip unless `out\samples\` exists (build it with

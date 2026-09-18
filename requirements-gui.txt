@@ -2,3 +2,9 @@
 numpy
 Pillow
 PySide6>=6.7
+
+# Audio preview: decodes Wwise Vorbis (.wem), which nothing standard reads.
+# BSD-3-Clause, prebuilt wheels for CPython 3.10-3.14 on Windows/Linux/macOS.
+# Optional at runtime: without it the Audio tab still browses and exports,
+# and Play falls back to a vgmstream-cli on PATH.
+pyvgmstream
