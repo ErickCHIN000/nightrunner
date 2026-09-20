@@ -5,7 +5,7 @@ Right: the detail of the selection — a material (overview, typed parameters vs
 texture bindings with catalog status, models / meshes that use it, raw records), a preset (declarations and the
 materials that use it), a texture (materials binding it, catalog providers) — or the database stats page.
 
-Other tabs link here through `ctx.openMaterial(name)` → `open_material(name)`. The SDB itself is opened in a
+Other tabs link here through `ctx.openMaterial.emit(name)` → `open_material(name)`. The SDB itself is opened in a
 worker (first access to `ctx.sdb.sdb`); nothing here parses on the GUI thread.
 """
 from __future__ import annotations
@@ -456,7 +456,7 @@ class Tab(QWidget):
         self.tex_providers = _item_table(["catalog provider (pack)", "gid", "logical name"])
         self.tex_providers.setColumnWidth(0, 380)
         self.tex_providers.cellDoubleClicked.connect(
-            lambda r, _c: self.ctx.openTexture(int(self.tex_providers.item(r, 1).text())))
+            lambda r, _c: self.ctx.openTexture.emit(int(self.tex_providers.item(r, 1).text())))
         sp.addWidget(self.tex_users)
         sp.addWidget(self.tex_providers)
         sp.setSizes([450, 200])
@@ -1013,7 +1013,7 @@ class Tab(QWidget):
     def _on_texture_item(self, item: QTreeWidgetItem, _col: int) -> None:
         gids = item.data(0, Qt.UserRole)
         if gids:
-            self.ctx.openTexture(int(gids[0]))
+            self.ctx.openTexture.emit(int(gids[0]))
         elif item.childCount() == 0 and item.text(2 if item.treeWidget() is self.variants else 0):
             self.ctx.status.emit("That texture is not in any loaded pack.")
 
@@ -1213,7 +1213,7 @@ class Tab(QWidget):
     def _on_model_item(self, item: QTreeWidgetItem, _col: int) -> None:
         name = item.data(0, Qt.UserRole)
         if name:
-            self.ctx.openModel(name)
+            self.ctx.openModel.emit(name)
 
     def start_mesh_scan(self) -> None:
         self._mesh_scan_requested = True
@@ -1277,7 +1277,7 @@ class Tab(QWidget):
         it = self.meshes_table.item(row, 0)
         g = it.data(Qt.UserRole) if it else None
         if g is not None:
-            self.ctx.openMesh(int(g))
+            self.ctx.openMesh.emit(int(g))
 
     # ================================================================================================================
     # preset / texture / stats pages
